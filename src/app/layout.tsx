@@ -10,7 +10,7 @@ const almarai = Almarai({
 });
 
 export const metadata: Metadata = {
-  title: "Creative Event Ops",
+  title: "Creative Group",
   description: "Event operations platform",
 };
 
