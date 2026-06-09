@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
 import { loginRequest, meRequest } from "./auth.api";
@@ -33,6 +33,8 @@ function getErrorMessage(error: unknown) {
 
 export function useLogin() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const setAuth = useAuthStore((state) => state.setAuth);
   const setUser = useAuthStore((state) => state.setUser);
 
@@ -52,8 +54,9 @@ export function useLogin() {
     },
 
     onSuccess: () => {
+      const nextUrl = searchParams.get("next") || "/dashboard";
       toast.success("تم تسجيل الدخول بنجاح");
-      router.replace("/dashboard");
+      router.replace(nextUrl);
     },
 
     onError: (error) => {

@@ -17,6 +17,7 @@ type AuthState = {
   refreshToken: string | null;
   user: AuthUser | null;
   isAuthenticated: boolean;
+  hasHydrated: boolean;
 
   setAuth: (payload: {
     accessToken: string;
@@ -25,6 +26,7 @@ type AuthState = {
   }) => void;
 
   setUser: (user: AuthUser | null) => void;
+  setHasHydrated: (value: boolean) => void;
   logout: () => void;
 };
 
@@ -35,6 +37,7 @@ export const useAuthStore = create<AuthState>()(
       refreshToken: null,
       user: null,
       isAuthenticated: false,
+      hasHydrated: false,
 
       setAuth: ({ accessToken, refreshToken, user = null }) => {
         set({
@@ -49,6 +52,10 @@ export const useAuthStore = create<AuthState>()(
         set({ user });
       },
 
+      setHasHydrated: (value) => {
+        set({ hasHydrated: value });
+      },
+
       logout: () => {
         set({
           accessToken: null,
@@ -60,6 +67,9 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "creative-auth",
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
     },
   ),
 );

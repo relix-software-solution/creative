@@ -10,4 +10,13 @@ export type LoginResponse = {
   refreshToken: string;
 };
 
+export type RefreshTokenPayload = {
+  refreshToken: string;
+};
+
+export type RefreshTokenResponse = {
+  accessToken: string;
+  refreshToken: string;
+};
+
 export type MeResponse = AuthUser;
