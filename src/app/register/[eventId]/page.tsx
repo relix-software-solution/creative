@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   ArrowRight,
   CalendarDays,
@@ -19,6 +19,10 @@ import {
   PublicRegistrationField,
   PublicRegistrationFieldOption,
 } from "@/features/public-events/public-events.types";
+import {
+  getPublicRegistrationStorageKey,
+  normalizePublicRegistrationSuccess,
+} from "@/features/public-events/public-registration-result";
 
 type BaseFormState = {
   attendeeTypeId: string;
@@ -51,30 +55,11 @@ function getOptionValue(option: PublicRegistrationFieldOption | string) {
   return option.value;
 }
 
-function readRegistrationId(data: unknown) {
-  if (!data || typeof data !== "object") return "";
-
-  const value = data as {
-    id?: string;
-    publicId?: string;
-    registration?: {
-      id?: string;
-      publicId?: string;
-    };
-  };
-
-  return (
-    value.publicId ||
-    value.id ||
-    value.registration?.publicId ||
-    value.registration?.id ||
-    ""
-  );
-}
-
 export default function RegisterPage() {
   const params = useParams<{ eventId: string }>();
   const eventId = params.eventId;
+
+  const router = useRouter();
 
   const eventQuery = usePublicEvent(eventId);
   const registerMutation = useRegisterToPublicEvent(eventId);
@@ -94,7 +79,6 @@ export default function RegisterPage() {
 
   const [customFields, setCustomFields] = useState<Record<string, unknown>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [successRegistrationId, setSuccessRegistrationId] = useState("");
 
   const attendeeTypes = event?.attendeeTypes ?? [];
 
@@ -180,21 +164,6 @@ export default function RegisterPage() {
     return Object.keys(nextErrors).length === 0;
   }
 
-  function resetForm() {
-    setBaseForm({
-      attendeeTypeId: selectedAttendeeTypeId,
-      fullName: "",
-      phone: "",
-      email: "",
-      companyName: "",
-      jobTitle: "",
-      externalId: "",
-      notes: "",
-    });
-    setCustomFields({});
-    setErrors({});
-  }
-
   function handleSubmit(eventForm: FormEvent<HTMLFormElement>) {
     eventForm.preventDefault();
 
@@ -214,8 +183,14 @@ export default function RegisterPage() {
       },
       {
         onSuccess: (data) => {
-          setSuccessRegistrationId(readRegistrationId(data));
-          resetForm();
+          const successData = normalizePublicRegistrationSuccess(eventId, data);
+
+          sessionStorage.setItem(
+            getPublicRegistrationStorageKey(eventId),
+            JSON.stringify(successData),
+          );
+
+          router.push(`/register/${eventId}/success`);
         },
       },
     );
@@ -446,243 +421,206 @@ export default function RegisterPage() {
         </aside>
 
         <section className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
-          {successRegistrationId ? (
-            <div className="flex min-h-[520px] flex-col items-center justify-center text-center">
-              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-emerald-50 text-emerald-600">
-                <CheckCircle2 className="h-9 w-9" />
-              </div>
-
-              <h2 className="text-2xl font-extrabold text-[#4B4B4B]">
-                تم إرسال طلب التسجيل بنجاح
-              </h2>
-
-              <p className="mt-3 max-w-md text-sm font-bold leading-7 text-[#4B4B4B]/60">
-                تم حفظ بياناتك بنجاح. احتفظ برقم التسجيل التالي لاستخدامه عند
-                الحاجة.
+          <>
+            <div className="mb-6">
+              <p className="text-sm font-extrabold text-[#A88042]">
+                Registration Form
               </p>
-
-              <div className="mt-6 rounded-2xl border border-black/10 bg-[#F8F8FF] px-5 py-4">
-                <p className="text-xs font-bold text-[#4B4B4B]/50">
-                  رقم التسجيل
-                </p>
-                <p
-                  dir="ltr"
-                  className="mt-1 text-lg font-extrabold text-[#A88042]"
-                >
-                  {successRegistrationId}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setSuccessRegistrationId("")}
-                className="mt-6 h-12 rounded-2xl bg-black px-6 text-sm font-extrabold text-white transition hover:bg-[#A88042]"
-              >
-                تسجيل شخص آخر
-              </button>
+              <h2 className="mt-2 text-2xl font-extrabold text-[#4B4B4B]">
+                تسجيل الحضور
+              </h2>
+              <p className="mt-2 text-sm font-bold leading-7 text-[#4B4B4B]/60">
+                املأ البيانات التالية لإتمام طلب التسجيل في الفعالية.
+              </p>
             </div>
-          ) : (
-            <>
-              <div className="mb-6">
-                <p className="text-sm font-extrabold text-[#A88042]">
-                  Registration Form
-                </p>
-                <h2 className="mt-2 text-2xl font-extrabold text-[#4B4B4B]">
-                  تسجيل الحضور
-                </h2>
-                <p className="mt-2 text-sm font-bold leading-7 text-[#4B4B4B]/60">
-                  املأ البيانات التالية لإتمام طلب التسجيل في الفعالية.
-                </p>
-              </div>
 
-              <form className="grid gap-4" onSubmit={handleSubmit}>
-                {attendeeTypes.length > 0 ? (
-                  <div className="space-y-2">
-                    <label className="text-sm font-extrabold text-[#4B4B4B]">
-                      نوع الحضور
-                    </label>
-                    <select
-                      value={selectedAttendeeTypeId}
-                      onChange={(event) => {
-                        updateBaseField("attendeeTypeId", event.target.value);
-                        setCustomFields({});
-                      }}
-                      className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
-                    >
-                      {attendeeTypes.map((type) => (
-                        <option key={type.id} value={type.id}>
-                          {type.nameAr}
-                        </option>
-                      ))}
-                    </select>
-                    {errors.attendeeTypeId ? (
-                      <p className="text-sm font-bold text-red-600">
-                        {errors.attendeeTypeId}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold leading-7 text-red-700">
-                    لا توجد أنواع حضور مفعّلة لهذه الفعالية. لا يمكن التسجيل
-                    حاليًا.
-                  </div>
-                )}
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-sm font-extrabold text-[#4B4B4B]">
-                      الاسم الكامل <span className="text-red-600">*</span>
-                    </label>
-                    <input
-                      value={baseForm.fullName}
-                      onChange={(event) =>
-                        updateBaseField("fullName", event.target.value)
-                      }
-                      placeholder="مثال: محمد أحمد"
-                      className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
-                    />
-                    {errors.fullName ? (
-                      <p className="text-sm font-bold text-red-600">
-                        {errors.fullName}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-extrabold text-[#4B4B4B]">
-                      رقم الهاتف <span className="text-red-600">*</span>
-                    </label>
-                    <input
-                      value={baseForm.phone}
-                      onChange={(event) =>
-                        updateBaseField("phone", event.target.value)
-                      }
-                      placeholder="+963944123456"
-                      dir="ltr"
-                      className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-left text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
-                    />
-                    {errors.phone ? (
-                      <p className="text-sm font-bold text-red-600">
-                        {errors.phone}
-                      </p>
-                    ) : null}
-                  </div>
+            <form className="grid gap-4" onSubmit={handleSubmit}>
+              {attendeeTypes.length > 0 ? (
+                <div className="space-y-2">
+                  <label className="text-sm font-extrabold text-[#4B4B4B]">
+                    نوع الحضور
+                  </label>
+                  <select
+                    value={selectedAttendeeTypeId}
+                    onChange={(event) => {
+                      updateBaseField("attendeeTypeId", event.target.value);
+                      setCustomFields({});
+                    }}
+                    className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                  >
+                    {attendeeTypes.map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.nameAr}
+                      </option>
+                    ))}
+                  </select>
+                  {errors.attendeeTypeId ? (
+                    <p className="text-sm font-bold text-red-600">
+                      {errors.attendeeTypeId}
+                    </p>
+                  ) : null}
                 </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-sm font-extrabold text-[#4B4B4B]">
-                      البريد الإلكتروني
-                    </label>
-                    <input
-                      value={baseForm.email}
-                      onChange={(event) =>
-                        updateBaseField("email", event.target.value)
-                      }
-                      placeholder="name@example.com"
-                      dir="ltr"
-                      className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-left text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
-                    />
-                    {errors.email ? (
-                      <p className="text-sm font-bold text-red-600">
-                        {errors.email}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-extrabold text-[#4B4B4B]">
-                      الشركة
-                    </label>
-                    <input
-                      value={baseForm.companyName}
-                      onChange={(event) =>
-                        updateBaseField("companyName", event.target.value)
-                      }
-                      placeholder="اسم الشركة"
-                      className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
-                    />
-                  </div>
+              ) : (
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold leading-7 text-red-700">
+                  لا توجد أنواع حضور مفعّلة لهذه الفعالية. لا يمكن التسجيل
+                  حاليًا.
                 </div>
+              )}
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-sm font-extrabold text-[#4B4B4B]">
-                      المسمى الوظيفي
-                    </label>
-                    <input
-                      value={baseForm.jobTitle}
-                      onChange={(event) =>
-                        updateBaseField("jobTitle", event.target.value)
-                      }
-                      placeholder="مثال: مدير تسويق"
-                      className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-extrabold text-[#4B4B4B]">
-                      رقم خارجي
-                    </label>
-                    <input
-                      value={baseForm.externalId}
-                      onChange={(event) =>
-                        updateBaseField("externalId", event.target.value)
-                      }
-                      placeholder="اختياري"
-                      className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
-                    />
-                  </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-extrabold text-[#4B4B4B]">
+                    الاسم الكامل <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    value={baseForm.fullName}
+                    onChange={(event) =>
+                      updateBaseField("fullName", event.target.value)
+                    }
+                    placeholder="مثال: محمد أحمد"
+                    className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                  />
+                  {errors.fullName ? (
+                    <p className="text-sm font-bold text-red-600">
+                      {errors.fullName}
+                    </p>
+                  ) : null}
                 </div>
-
-                {visibleFields.length > 0 ? (
-                  <div className="grid gap-4 border-t border-black/10 pt-5 md:grid-cols-2">
-                    <div className="md:col-span-2">
-                      <p className="text-sm font-extrabold text-[#A88042]">
-                        بيانات إضافية
-                      </p>
-                    </div>
-
-                    {visibleFields.map((field) => renderField(field))}
-                  </div>
-                ) : null}
 
                 <div className="space-y-2">
                   <label className="text-sm font-extrabold text-[#4B4B4B]">
-                    ملاحظات
+                    رقم الهاتف <span className="text-red-600">*</span>
                   </label>
-                  <textarea
-                    rows={3}
-                    value={baseForm.notes}
+                  <input
+                    value={baseForm.phone}
                     onChange={(event) =>
-                      updateBaseField("notes", event.target.value)
+                      updateBaseField("phone", event.target.value)
                     }
-                    placeholder="ملاحظات اختيارية..."
-                    className="w-full resize-none rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 py-3 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                    placeholder="+963944123456"
+                    dir="ltr"
+                    className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-left text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                  />
+                  {errors.phone ? (
+                    <p className="text-sm font-bold text-red-600">
+                      {errors.phone}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-extrabold text-[#4B4B4B]">
+                    البريد الإلكتروني
+                  </label>
+                  <input
+                    value={baseForm.email}
+                    onChange={(event) =>
+                      updateBaseField("email", event.target.value)
+                    }
+                    placeholder="name@example.com"
+                    dir="ltr"
+                    className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-left text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                  />
+                  {errors.email ? (
+                    <p className="text-sm font-bold text-red-600">
+                      {errors.email}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-extrabold text-[#4B4B4B]">
+                    الشركة
+                  </label>
+                  <input
+                    value={baseForm.companyName}
+                    onChange={(event) =>
+                      updateBaseField("companyName", event.target.value)
+                    }
+                    placeholder="اسم الشركة"
+                    className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-extrabold text-[#4B4B4B]">
+                    المسمى الوظيفي
+                  </label>
+                  <input
+                    value={baseForm.jobTitle}
+                    onChange={(event) =>
+                      updateBaseField("jobTitle", event.target.value)
+                    }
+                    placeholder="مثال: مدير تسويق"
+                    className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
                   />
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={
-                    registerMutation.isPending || attendeeTypes.length === 0
-                  }
-                  className="mt-2 flex h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#A88042] px-5 text-sm font-extrabold text-white shadow-lg shadow-[#A88042]/25 transition hover:bg-[#8F6D37] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {registerMutation.isPending ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="h-5 w-5" />
-                  )}
-                  إرسال طلب التسجيل
-                </button>
+                <div className="space-y-2">
+                  <label className="text-sm font-extrabold text-[#4B4B4B]">
+                    رقم خارجي
+                  </label>
+                  <input
+                    value={baseForm.externalId}
+                    onChange={(event) =>
+                      updateBaseField("externalId", event.target.value)
+                    }
+                    placeholder="اختياري"
+                    className="h-12 w-full rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                  />
+                </div>
+              </div>
 
-                <p className="text-center text-xs font-bold leading-6 text-[#4B4B4B]/45">
-                  بالضغط على إرسال، سيتم حفظ بياناتك لإنشاء QR الدخول الخاص بك.
-                </p>
-              </form>
-            </>
-          )}
+              {visibleFields.length > 0 ? (
+                <div className="grid gap-4 border-t border-black/10 pt-5 md:grid-cols-2">
+                  <div className="md:col-span-2">
+                    <p className="text-sm font-extrabold text-[#A88042]">
+                      بيانات إضافية
+                    </p>
+                  </div>
+
+                  {visibleFields.map((field) => renderField(field))}
+                </div>
+              ) : null}
+
+              <div className="space-y-2">
+                <label className="text-sm font-extrabold text-[#4B4B4B]">
+                  ملاحظات
+                </label>
+                <textarea
+                  rows={3}
+                  value={baseForm.notes}
+                  onChange={(event) =>
+                    updateBaseField("notes", event.target.value)
+                  }
+                  placeholder="ملاحظات اختيارية..."
+                  className="w-full resize-none rounded-2xl border border-black/10 bg-[#F8F8FF] px-4 py-3 text-sm font-bold outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={
+                  registerMutation.isPending || attendeeTypes.length === 0
+                }
+                className="mt-2 flex h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#A88042] px-5 text-sm font-extrabold text-white shadow-lg shadow-[#A88042]/25 transition hover:bg-[#8F6D37] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {registerMutation.isPending ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-5 w-5" />
+                )}
+                إرسال طلب التسجيل
+              </button>
+
+              <p className="text-center text-xs font-bold leading-6 text-[#4B4B4B]/45">
+                بالضغط على إرسال، سيتم حفظ بياناتك لإنشاء QR الدخول الخاص بك.
+              </p>
+            </form>
+          </>
         </section>
       </section>
     </main>

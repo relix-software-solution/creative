@@ -90,15 +90,33 @@ export type PublicRegisterResponse = {
   qrToken?: string;
   qrImageUrl?: string;
   imageUrl?: string;
+  publicUrl?: string;
+
   registration?: {
-    id: string;
+    id?: string;
     publicId?: string;
     fullName?: string;
     status?: string;
+    phone?: string | null;
+    email?: string | null;
   };
+
   qr?: {
+    id?: string;
     qrToken?: string;
+    token?: string;
     imageUrl?: string;
     publicUrl?: string;
+    qrImageUrl?: string;
   };
+};
+
+export type PublicRegistrationSuccessData = {
+  eventId: string;
+  registrationId: string;
+  publicId?: string;
+  fullName: string;
+  status?: string;
+  qrToken?: string;
+  qrImageUrl?: string;
 };
