@@ -31,7 +31,7 @@ function normalizePublicEventsList(data: unknown): PublicEventsListResponse {
 }
 
 export async function getPublicEvents(params: PublicEventsListParams = {}) {
-  const response = await publicClient.get("/public/exhibitions", {
+  const response = await publicClient.get("/public/events", {
     params: {
       page: params.page ?? 1,
       limit: params.limit ?? 20,
@@ -43,7 +43,7 @@ export async function getPublicEvents(params: PublicEventsListParams = {}) {
 }
 
 export async function getPublicEvent(id: string) {
-  const response = await publicClient.get(`/public/exhibitions/${id}`);
+  const response = await publicClient.get(`/public/events/${id}`);
   return unwrapApiData<PublicEvent>(response.data);
 }
 
@@ -52,7 +52,7 @@ export async function registerToPublicEvent(
   payload: PublicRegisterPayload,
 ) {
   const response = await publicClient.post(
-    `/public/exhibitions/${eventId}/register`,
+    `/public/events/${eventId}/register`,
     payload,
   );
 

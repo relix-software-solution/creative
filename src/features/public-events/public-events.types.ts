@@ -3,6 +3,8 @@ export type PublicAttendeeType = {
   code: string;
   nameAr: string;
   nameEn?: string | null;
+  descriptionAr?: string | null;
+  descriptionEn?: string | null;
 };
 
 export type PublicRegistrationFieldType =
@@ -15,6 +17,12 @@ export type PublicRegistrationFieldType =
   | "SELECT"
   | "CHECKBOX";
 
+export type PublicRegistrationFieldOption = {
+  labelAr?: string;
+  labelEn?: string;
+  value: string;
+};
+
 export type PublicRegistrationField = {
   id: string;
   attendeeTypeId: string;
@@ -24,30 +32,26 @@ export type PublicRegistrationField = {
   type: PublicRegistrationFieldType;
   placeholderAr?: string | null;
   placeholderEn?: string | null;
-  options?: string[] | null;
+  options?: PublicRegistrationFieldOption[] | string[] | null;
   isRequired: boolean;
+  isActive?: boolean;
   sortOrder: number;
 };
 
 export type PublicEvent = {
   id: string;
-  type?: string;
-
+  type?: string | null;
   titleAr: string;
   titleEn?: string | null;
-
   descriptionAr?: string | null;
   descriptionEn?: string | null;
-
   startsAt: string;
   endsAt?: string | null;
   timezone?: string | null;
-
   client?: {
     id: string;
     name: string;
   } | null;
-
   attendeeTypes?: PublicAttendeeType[];
   registrationFields?: PublicRegistrationField[];
 };
@@ -73,18 +77,28 @@ export type PublicRegisterPayload = {
   email?: string;
   companyName?: string;
   jobTitle?: string;
+  externalId?: string;
   customFields?: Record<string, unknown>;
+  notes?: string;
 };
 
 export type PublicRegisterResponse = {
-  registration: {
+  id?: string;
+  publicId?: string;
+  fullName?: string;
+  status?: string;
+  qrToken?: string;
+  qrImageUrl?: string;
+  imageUrl?: string;
+  registration?: {
     id: string;
-    fullName: string;
+    publicId?: string;
+    fullName?: string;
     status?: string;
   };
   qr?: {
-    id?: string;
+    qrToken?: string;
     imageUrl?: string;
-    payload?: string;
+    publicUrl?: string;
   };
 };

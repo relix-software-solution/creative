@@ -24,14 +24,14 @@ function formatDate(value?: string | null) {
   }).format(new Date(value));
 }
 
-function getEventTypeLabel(type?: string) {
+function getEventTypeLabel(type?: string | null) {
   if (type === "EXHIBITION") return "معرض";
   if (type === "CONFERENCE") return "مؤتمر";
   if (type === "WORKSHOP") return "ورشة عمل";
   return "فعالية";
 }
 
-function getEventDescription(event: PublicEvent) {
+function getDescription(event: PublicEvent) {
   return (
     event.descriptionAr ||
     event.descriptionEn ||
@@ -140,7 +140,7 @@ export default function LandingPage() {
                 <CheckCircle2 className="mb-3 h-6 w-6 text-[#A88042]" />
                 <p className="text-sm font-extrabold">تسجيل سهل</p>
                 <p className="mt-1 text-xs font-bold leading-5 text-[#4B4B4B]/55">
-                  خطوات بسيطة وواضحة.
+                  خطوات واضحة وسريعة.
                 </p>
               </div>
 
@@ -204,20 +204,17 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
       <section id="events" className="mx-auto max-w-7xl px-4 py-20 lg:px-8">
-        <div className="mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-sm font-extrabold text-[#A88042]">
-              Available Events
-            </p>
-            <h2 className="mt-2 text-3xl font-extrabold text-[#4B4B4B] md:text-4xl">
-              المعارض والفعاليات المتاحة للتسجيل
-            </h2>
-            <p className="mt-3 max-w-2xl text-sm font-bold leading-7 text-[#4B4B4B]/60">
-              اختر المعرض المناسب وابدأ التسجيل للحصول على رمز الدخول الخاص بك.
-            </p>
-          </div>
+        <div className="mb-10">
+          <p className="text-sm font-extrabold text-[#A88042]">
+            Available Events
+          </p>
+          <h2 className="mt-2 text-3xl font-extrabold text-[#4B4B4B] md:text-4xl">
+            المعارض والفعاليات المتاحة للتسجيل
+          </h2>
+          <p className="mt-3 max-w-2xl text-sm font-bold leading-7 text-[#4B4B4B]/60">
+            اختر المعرض المناسب وابدأ التسجيل للحصول على رمز الدخول الخاص بك.
+          </p>
         </div>
 
         {eventsQuery.isLoading ? (
@@ -235,8 +232,8 @@ export default function LandingPage() {
               تعذر تحميل الفعاليات
             </p>
             <p className="mt-2 text-sm font-bold text-red-600/70">
-              إذا كان endpoint الفعاليات يتطلب تسجيل دخول، نحتاج public
-              endpoint.
+              تأكد من تشغيل الباك وأن endpoint /public/events يعمل بدون تسجيل
+              دخول.
             </p>
           </div>
         ) : events.length === 0 ? (
@@ -245,7 +242,7 @@ export default function LandingPage() {
               لا توجد فعاليات متاحة حاليًا
             </p>
             <p className="mt-2 text-sm font-bold text-[#4B4B4B]/55">
-              عند إضافة فعاليات من لوحة الإدارة ستظهر هنا تلقائيًا.
+              عند نشر فعاليات عامة من لوحة الإدارة ستظهر هنا.
             </p>
           </div>
         ) : (
@@ -282,7 +279,7 @@ export default function LandingPage() {
                   ) : null}
 
                   <p className="mt-4 min-h-[56px] text-sm font-bold leading-7 text-[#4B4B4B]/60">
-                    {getEventDescription(event)}
+                    {getDescription(event)}
                   </p>
 
                   <div className="mt-5 space-y-3 border-t border-black/10 pt-5">
