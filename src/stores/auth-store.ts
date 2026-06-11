@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type UserRole = "SUPER_ADMIN" | "CLIENT_VIEWER" | "STAFF";
+export type UserRole = "SUPER_ADMIN" | "ADMIN" | "CLIENT_VIEWER" | "STAFF";
 
 export type AuthUser = {
   id: string;
@@ -49,7 +49,10 @@ export const useAuthStore = create<AuthState>()(
       },
 
       setUser: (user) => {
-        set({ user });
+        set({
+          user,
+          isAuthenticated: Boolean(user),
+        });
       },
 
       setHasHydrated: (value) => {

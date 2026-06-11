@@ -15,6 +15,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
   const pathname = usePathname();
 
   const accessToken = useAuthStore((state) => state.accessToken);
+  const refreshToken = useAuthStore((state) => state.refreshToken);
   const user = useAuthStore((state) => state.user);
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
   const setUser = useAuthStore((state) => state.setUser);
@@ -25,8 +26,10 @@ export function AuthGuard({ children }: AuthGuardProps) {
   useEffect(() => {
     if (!hasHydrated) return;
 
+    let isMounted = true;
+
     async function checkAuth() {
-      if (!accessToken && !useAuthStore.getState().refreshToken) {
+      if (!accessToken && !refreshToken) {
         clearAuth();
         router.replace(`/login?next=${encodeURIComponent(pathname)}`);
         return;
@@ -39,16 +42,34 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
       try {
         const currentUser = await meRequest();
+
+        if (!isMounted) return;
+
         setUser(currentUser);
         setIsChecking(false);
       } catch {
+        if (!isMounted) return;
+
         clearAuth();
         router.replace(`/login?next=${encodeURIComponent(pathname)}`);
       }
     }
 
     checkAuth();
-  }, [accessToken, clearAuth, hasHydrated, pathname, router, setUser, user]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    accessToken,
+    refreshToken,
+    clearAuth,
+    hasHydrated,
+    pathname,
+    router,
+    setUser,
+    user,
+  ]);
 
   if (!hasHydrated || isChecking) {
     return (

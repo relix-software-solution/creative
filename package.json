@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:lan": "next dev -H 192.168.243.13 -p 3001",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -11,6 +12,7 @@
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
     "@tanstack/react-query": "^5.101.0",
+    "@zxing/browser": "^0.2.0",
     "axios": "^1.17.0",
     "clsx": "^2.1.1",
     "dexie": "^4.4.3",

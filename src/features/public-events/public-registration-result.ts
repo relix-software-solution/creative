@@ -1,4 +1,5 @@
 import {
+  PublicQrTokenObject,
   PublicRegistrationSuccessData,
   PublicRegisterResponse,
 } from "./public-events.types";
@@ -7,6 +8,39 @@ function firstString(...values: unknown[]) {
   return values.find((value): value is string => {
     return typeof value === "string" && value.trim().length > 0;
   });
+}
+
+function readQrToken(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+
+  if (value && typeof value === "object") {
+    const tokenObject = value as PublicQrTokenObject;
+
+    return (
+      firstString(
+        tokenObject.qrToken,
+        tokenObject.token,
+        tokenObject.value,
+        tokenObject.signedToken,
+      ) ?? ""
+    );
+  }
+
+  return "";
+}
+
+function readQrImageUrl(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+
+  const tokenObject = value as PublicQrTokenObject;
+
+  return (
+    firstString(
+      tokenObject.imageUrl,
+      tokenObject.publicUrl,
+      tokenObject.qrImageUrl,
+    ) ?? ""
+  );
 }
 
 export function normalizePublicRegistrationSuccess(
@@ -21,18 +55,37 @@ export function normalizePublicRegistrationSuccess(
       response.id,
     ) ?? "";
 
+  const publicId =
+    firstString(response.registration?.publicId, response.publicId) ?? "";
+
   const fullName =
     firstString(response.registration?.fullName, response.fullName) ?? "—";
 
+  const phone =
+    firstString(response.registration?.phone, response.phone) ?? null;
+
+  const email =
+    firstString(response.registration?.email, response.email) ?? null;
+
+  const companyName =
+    firstString(response.registration?.companyName, response.companyName) ??
+    null;
+
+  const jobTitle =
+    firstString(response.registration?.jobTitle, response.jobTitle) ?? null;
+
   const qrToken =
-    firstString(response.qr?.qrToken, response.qr?.token, response.qrToken) ??
-    "";
+    firstString(
+      readQrToken(response.qrToken),
+      readQrToken(response.qr),
+      response.qr?.qrToken,
+      response.qr?.token,
+    ) ?? "";
 
   const qrImageUrl =
     firstString(
-      response.qr?.imageUrl,
-      response.qr?.publicUrl,
-      response.qr?.qrImageUrl,
+      readQrImageUrl(response.qrToken),
+      readQrImageUrl(response.qr),
       response.qrImageUrl,
       response.imageUrl,
       response.publicUrl,
@@ -41,8 +94,12 @@ export function normalizePublicRegistrationSuccess(
   return {
     eventId,
     registrationId,
-    publicId: response.registration?.publicId ?? response.publicId,
+    publicId,
     fullName,
+    phone,
+    email,
+    companyName,
+    jobTitle,
     status: response.registration?.status ?? response.status,
     qrToken,
     qrImageUrl,

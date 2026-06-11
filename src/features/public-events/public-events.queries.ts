@@ -55,8 +55,13 @@ export function usePublicEvent(id: string) {
 
 export function useRegisterToPublicEvent(eventId: string) {
   return useMutation({
-    mutationFn: (payload: PublicRegisterPayload) =>
-      registerToPublicEvent(eventId, payload),
+    mutationFn: async (payload: PublicRegisterPayload) => {
+      const response = await registerToPublicEvent(eventId, payload);
+
+      console.log("PUBLIC REGISTER RESPONSE:", response);
+
+      return response;
+    },
 
     onSuccess: () => {
       toast.success("تم إرسال طلب التسجيل بنجاح");

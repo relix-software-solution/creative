@@ -1,6 +1,7 @@
-import { AuthGuard } from "@/features/auth/auth-guard";
 import { AdminSidebar } from "@/components/layout/admin/admin-sidebar";
 import { AdminTopbar } from "@/components/layout/admin/admin-topbar";
+import { RoleGuard } from "@/components/auth/role-guard";
+import { USER_ROLES } from "@/lib/auth/roles";
 
 export default function AdminLayout({
   children,
@@ -8,7 +9,7 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   return (
-    <AuthGuard>
+    <RoleGuard allowedRoles={[USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN]}>
       <div className="min-h-screen overflow-x-hidden bg-[#F8F8FF]">
         <AdminSidebar />
 
@@ -20,6 +21,6 @@ export default function AdminLayout({
           </main>
         </div>
       </div>
-    </AuthGuard>
+    </RoleGuard>
   );
 }

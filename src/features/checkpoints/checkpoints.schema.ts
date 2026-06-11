@@ -6,9 +6,18 @@ export const checkpointSchema = z.object({
   zoneId: z.string().min(1, "المنطقة مطلوبة"),
 
   type: z.enum(
-    ["ENTRY_GATE", "EXIT_GATE", "REGISTRATION_DESK", "INFO_DESK", "OTHER"],
+    [
+      "ENTRY",
+      "EXIT",
+      "BOTH",
+      "SESSION_ROOM",
+      "VIP_AREA",
+      "INTERNAL_POINT",
+      "WORKSHOP_AREA",
+      "OTHER",
+    ],
     {
-      message: "نوع نقطة الدخول مطلوب",
+      message: "نوع نقطة المسح مطلوب",
     },
   ),
 
@@ -20,7 +29,7 @@ export const checkpointSchema = z.object({
     .string()
     .optional()
     .transform((value) => {
-      if (!value) return [];
+      if (!value?.trim()) return [];
 
       return value
         .split(",")

@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+import { getDefaultPathByRole } from "@/lib/auth/roles";
 import { useAuthStore } from "@/stores/auth-store";
 import { loginRequest, meRequest } from "./auth.api";
 import { LoginPayload } from "./auth.types";
@@ -31,12 +32,22 @@ function getErrorMessage(error: unknown) {
   return "تعذر تسجيل الدخول، تحقق من البيانات";
 }
 
+function isSafeNextUrl(nextUrl: string | null) {
+  if (!nextUrl) return false;
+  if (!nextUrl.startsWith("/")) return false;
+  if (nextUrl.startsWith("//")) return false;
+  if (nextUrl === "/login") return false;
+
+  return true;
+}
+
 export function useLogin() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const setAuth = useAuthStore((state) => state.setAuth);
   const setUser = useAuthStore((state) => state.setUser);
+  const clearAuth = useAuthStore((state) => state.logout);
 
   return useMutation({
     mutationFn: async (payload: LoginPayload) => {
@@ -47,16 +58,24 @@ export function useLogin() {
         refreshToken: auth.refreshToken,
       });
 
-      const user = await meRequest();
-      setUser(user);
+      try {
+        const user = await meRequest();
+        setUser(user);
 
-      return user;
+        return user;
+      } catch (error) {
+        clearAuth();
+        throw error;
+      }
     },
 
-    onSuccess: () => {
-      const nextUrl = searchParams.get("next") || "/dashboard";
+    onSuccess: (user) => {
+      const nextUrl = searchParams.get("next");
+      const fallbackUrl = getDefaultPathByRole(user.role);
+
       toast.success("تم تسجيل الدخول بنجاح");
-      router.replace(nextUrl);
+
+      router.replace(isSafeNextUrl(nextUrl) ? nextUrl! : fallbackUrl);
     },
 
     onError: (error) => {

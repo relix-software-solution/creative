@@ -1,33 +1,67 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+type ScannerContextPayload = {
+  assignmentId?: string | null;
+  eventId?: string | null;
+  eventTitle?: string | null;
+  checkpointId?: string | null;
+  checkpointName?: string | null;
+  checkpointType?: string | null;
+  deviceId?: string | null;
+  deviceName?: string | null;
+  deviceCode?: string | null;
+  deviceApiKey?: string | null;
+  staffSessionId?: string | null;
+};
+
 type DeviceState = {
+  assignmentId: string | null;
+
   deviceApiKey: string | null;
   deviceId: string | null;
+  deviceName: string | null;
+  deviceCode: string | null;
+
   eventId: string | null;
-  staffSessionId: string | null;
+  eventTitle: string | null;
+
   checkpointId: string | null;
+  checkpointName: string | null;
+  checkpointType: string | null;
 
-  setDeviceApiKey: (apiKey: string) => void;
+  staffSessionId: string | null;
 
-  setDeviceContext: (payload: {
-    deviceId?: string | null;
-    eventId?: string | null;
-    staffSessionId?: string | null;
-    checkpointId?: string | null;
-  }) => void;
+  setDeviceApiKey: (apiKey: string | null) => void;
+
+  setDeviceContext: (payload: ScannerContextPayload) => void;
+  setScannerContext: (payload: ScannerContextPayload) => void;
 
   clearDevice: () => void;
+};
+
+const emptyState = {
+  assignmentId: null,
+
+  deviceApiKey: null,
+  deviceId: null,
+  deviceName: null,
+  deviceCode: null,
+
+  eventId: null,
+  eventTitle: null,
+
+  checkpointId: null,
+  checkpointName: null,
+  checkpointType: null,
+
+  staffSessionId: null,
 };
 
 export const useDeviceStore = create<DeviceState>()(
   persist(
     (set) => ({
-      deviceApiKey: null,
-      deviceId: null,
-      eventId: null,
-      staffSessionId: null,
-      checkpointId: null,
+      ...emptyState,
 
       setDeviceApiKey: (apiKey) => {
         set({ deviceApiKey: apiKey });
@@ -40,14 +74,15 @@ export const useDeviceStore = create<DeviceState>()(
         }));
       },
 
+      setScannerContext: (payload) => {
+        set((state) => ({
+          ...state,
+          ...payload,
+        }));
+      },
+
       clearDevice: () => {
-        set({
-          deviceApiKey: null,
-          deviceId: null,
-          eventId: null,
-          staffSessionId: null,
-          checkpointId: null,
-        });
+        set(emptyState);
       },
     }),
     {

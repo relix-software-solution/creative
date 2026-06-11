@@ -5,14 +5,19 @@ import { useParams } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import {
   ArrowRight,
+  BriefcaseBusiness,
+  Building2,
   CalendarDays,
   CheckCircle2,
   Download,
   Home,
   Loader2,
+  Mail,
+  Phone,
   QrCode,
   RotateCcw,
   ShieldCheck,
+  UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePublicEvent } from "@/features/public-events/public-events.queries";
@@ -52,6 +57,11 @@ function getAbsoluteImageUrl(value?: string) {
   return `${backendOrigin}${value.startsWith("/") ? value : `/${value}`}`;
 }
 
+function getSafeText(value?: string | null) {
+  if (!value || !value.trim()) return "—";
+  return value;
+}
+
 export default function PublicRegistrationSuccessPage() {
   const params = useParams<{ eventId: string }>();
   const eventId = params.eventId;
@@ -85,7 +95,12 @@ export default function PublicRegistrationSuccessPage() {
     [successData?.qrImageUrl],
   );
 
-  const qrValue = successData?.qrToken || successData?.registrationId || "";
+  /**
+   * مهم جدًا:
+   * لا نستخدم registrationId ولا publicId كـ QR.
+   * scanner يحتاج signed qrToken فقط.
+   */
+  const qrValue = successData?.qrToken?.trim() || "";
 
   function downloadRenderedQr() {
     const svg = qrContainerRef.current?.querySelector("svg");
@@ -102,7 +117,9 @@ export default function PublicRegistrationSuccessPage() {
     const link = document.createElement("a");
 
     link.href = url;
-    link.download = `creative-registration-${successData?.registrationId || "qr"}.svg`;
+    link.download = `creative-registration-${
+      successData?.registrationId || "qr"
+    }.svg`;
     link.click();
 
     URL.revokeObjectURL(url);
@@ -113,6 +130,7 @@ export default function PublicRegistrationSuccessPage() {
       <main className="flex min-h-screen items-center justify-center bg-[#F8F8FF]">
         <div className="rounded-[2rem] border border-black/10 bg-white p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
           <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
           <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
             جاري تحميل نتيجة التسجيل...
           </p>
@@ -192,11 +210,13 @@ export default function PublicRegistrationSuccessPage() {
 
             <div>
               <CheckCircle2 className="mb-6 h-16 w-16 text-emerald-300" />
+
               <h1 className="text-4xl font-extrabold leading-[1.25]">
                 Registration
                 <br />
                 Confirmed
               </h1>
+
               <p className="mt-4 max-w-sm text-sm font-bold leading-7 text-white/55">
                 احتفظ برمز الدخول الخاص بك لاستخدامه عند بوابات الفعالية.
               </p>
@@ -249,9 +269,13 @@ export default function PublicRegistrationSuccessPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
-              <p className="text-xs font-bold text-[#4B4B4B]/50">اسم المسجل</p>
+              <div className="flex items-center gap-2 text-xs font-bold text-[#4B4B4B]/50">
+                <UserRound className="h-4 w-4 text-[#A88042]" />
+                اسم المسجل
+              </div>
+
               <p className="mt-2 text-lg font-extrabold text-[#4B4B4B]">
-                {successData.fullName}
+                {getSafeText(successData.fullName)}
               </p>
             </div>
 
@@ -259,18 +283,67 @@ export default function PublicRegistrationSuccessPage() {
               <p className="text-xs font-bold text-[#4B4B4B]/50">
                 حالة التسجيل
               </p>
+
               <p className="mt-2 text-lg font-extrabold text-emerald-700">
                 {getStatusLabel(successData.status)}
               </p>
             </div>
 
+            <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#4B4B4B]/50">
+                <Phone className="h-4 w-4 text-[#A88042]" />
+                رقم الهاتف
+              </div>
+
+              <p dir="ltr" className="mt-2 text-left text-base font-extrabold">
+                {getSafeText(successData.phone)}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#4B4B4B]/50">
+                <Mail className="h-4 w-4 text-[#A88042]" />
+                البريد الإلكتروني
+              </div>
+
+              <p
+                dir="ltr"
+                className="mt-2 break-all text-left text-base font-extrabold"
+              >
+                {getSafeText(successData.email)}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#4B4B4B]/50">
+                <Building2 className="h-4 w-4 text-[#A88042]" />
+                الشركة
+              </div>
+
+              <p className="mt-2 text-base font-extrabold">
+                {getSafeText(successData.companyName)}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#4B4B4B]/50">
+                <BriefcaseBusiness className="h-4 w-4 text-[#A88042]" />
+                المسمى الوظيفي
+              </div>
+
+              <p className="mt-2 text-base font-extrabold">
+                {getSafeText(successData.jobTitle)}
+              </p>
+            </div>
+
             <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4 sm:col-span-2">
               <p className="text-xs font-bold text-[#4B4B4B]/50">رقم التسجيل</p>
+
               <p
                 dir="ltr"
                 className="mt-2 break-all text-lg font-extrabold text-[#A88042]"
               >
-                {successData.registrationId}
+                {successData.publicId || successData.registrationId}
               </p>
             </div>
           </div>
@@ -281,6 +354,7 @@ export default function PublicRegistrationSuccessPage() {
                 <p className="text-sm font-extrabold text-[#4B4B4B]">
                   رمز الدخول QR
                 </p>
+
                 <p className="mt-1 text-xs font-bold text-[#4B4B4B]/50">
                   استخدم هذا الرمز عند بوابة الدخول.
                 </p>
@@ -304,23 +378,18 @@ export default function PublicRegistrationSuccessPage() {
                   <QRCodeSVG value={qrValue} size={230} includeMargin />
                 </div>
               ) : (
-                <div className="flex h-64 w-64 items-center justify-center rounded-2xl border border-dashed border-black/15 bg-[#F8F8FF] text-center">
-                  <p className="max-w-[190px] text-sm font-bold leading-7 text-[#4B4B4B]/55">
-                    لم يرجع QR من الخادم. تم حفظ التسجيل فقط.
+                <div className="flex h-64 w-64 items-center justify-center rounded-2xl border border-dashed border-red-200 bg-red-50 px-5 text-center">
+                  <p className="max-w-[230px] text-sm font-extrabold leading-7 text-red-700">
+                    لم يرجع qrToken من الخادم. لا يمكن إنشاء QR صالح للمسح.
                   </p>
                 </div>
               )}
             </div>
 
-            {successData.qrToken ? (
-              <div className="mt-4 rounded-2xl bg-black p-4">
-                <p className="mb-2 text-xs font-bold text-white/45">QR Token</p>
-                <p
-                  dir="ltr"
-                  className="custom-scrollbar max-h-24 overflow-auto break-all text-left text-xs font-bold leading-6 text-white"
-                >
-                  {successData.qrToken}
-                </p>
+            {!qrValue && !qrImageUrl ? (
+              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-center text-sm font-extrabold leading-7 text-red-700">
+                يجب أن يرجع الباك qrToken كـ string أو داخل object مثل token /
+                qrToken.
               </div>
             ) : null}
           </div>
@@ -346,7 +415,9 @@ export default function PublicRegistrationSuccessPage() {
                 <Download className="h-5 w-5" />
                 تحميل QR
               </button>
-            ) : null}
+            ) : (
+              <div />
+            )}
 
             <Link
               href={`/register/${eventId}`}

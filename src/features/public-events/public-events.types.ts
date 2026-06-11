@@ -82,12 +82,35 @@ export type PublicRegisterPayload = {
   notes?: string;
 };
 
+export type PublicQrTokenObject = {
+  qrToken?: string;
+  token?: string;
+  value?: string;
+  signedToken?: string;
+  imageUrl?: string;
+  publicUrl?: string;
+  qrImageUrl?: string;
+};
+
 export type PublicRegisterResponse = {
   id?: string;
   publicId?: string;
   fullName?: string;
+  phone?: string | null;
+  email?: string | null;
+  companyName?: string | null;
+  jobTitle?: string | null;
   status?: string;
-  qrToken?: string;
+
+  /**
+   * الباك ممكن يرجعها string:
+   * qrToken: "eyJ..."
+   *
+   * أو object:
+   * qrToken: { token: "eyJ..." }
+   */
+  qrToken?: string | PublicQrTokenObject | null;
+
   qrImageUrl?: string;
   imageUrl?: string;
   publicUrl?: string;
@@ -96,19 +119,14 @@ export type PublicRegisterResponse = {
     id?: string;
     publicId?: string;
     fullName?: string;
-    status?: string;
     phone?: string | null;
     email?: string | null;
+    companyName?: string | null;
+    jobTitle?: string | null;
+    status?: string;
   };
 
-  qr?: {
-    id?: string;
-    qrToken?: string;
-    token?: string;
-    imageUrl?: string;
-    publicUrl?: string;
-    qrImageUrl?: string;
-  };
+  qr?: PublicQrTokenObject | null;
 };
 
 export type PublicRegistrationSuccessData = {
@@ -116,6 +134,10 @@ export type PublicRegistrationSuccessData = {
   registrationId: string;
   publicId?: string;
   fullName: string;
+  phone?: string | null;
+  email?: string | null;
+  companyName?: string | null;
+  jobTitle?: string | null;
   status?: string;
   qrToken?: string;
   qrImageUrl?: string;

@@ -33,8 +33,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useCheckpoints } from "@/features/checkpoints/checkpoints.queries";
 import {
+  useCheckpoints,
   useCreateCheckpoint,
   useDeleteCheckpoint,
   useUpdateCheckpoint,
@@ -55,12 +55,26 @@ import { useZones } from "@/features/zones/zones.queries";
 type PendingAction = "create" | "update" | "delete" | null;
 
 const checkpointTypeLabels: Record<CheckpointType, string> = {
-  ENTRY_GATE: "بوابة دخول",
-  EXIT_GATE: "بوابة خروج",
-  REGISTRATION_DESK: "مكتب تسجيل",
-  INFO_DESK: "مكتب معلومات",
+  ENTRY: "دخول",
+  EXIT: "خروج",
+  BOTH: "دخول وخروج",
+  SESSION_ROOM: "قاعة جلسة",
+  VIP_AREA: "منطقة VIP",
+  INTERNAL_POINT: "نقطة داخلية",
+  WORKSHOP_AREA: "منطقة ورشة",
   OTHER: "أخرى",
 };
+
+const checkpointTypeOptions = [
+  { label: "دخول", value: "ENTRY" },
+  { label: "خروج", value: "EXIT" },
+  { label: "دخول وخروج", value: "BOTH" },
+  { label: "قاعة جلسة", value: "SESSION_ROOM" },
+  { label: "منطقة VIP", value: "VIP_AREA" },
+  { label: "نقطة داخلية", value: "INTERNAL_POINT" },
+  { label: "منطقة ورشة", value: "WORKSHOP_AREA" },
+  { label: "أخرى", value: "OTHER" },
+] satisfies { label: string; value: CheckpointType }[];
 
 export default function CheckpointsPage() {
   const [page, setPage] = useState(1);
@@ -71,8 +85,10 @@ export default function CheckpointsPage() {
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+
   const [selectedCheckpoint, setSelectedCheckpoint] =
     useState<Checkpoint | null>(null);
+
   const [pendingValues, setPendingValues] =
     useState<CheckpointFormValues | null>(null);
 
@@ -113,7 +129,7 @@ export default function CheckpointsPage() {
       eventId: "",
       venueId: "",
       zoneId: "",
-      type: "ENTRY_GATE",
+      type: "ENTRY",
       nameAr: "",
       nameEn: "",
       code: "",
@@ -127,6 +143,7 @@ export default function CheckpointsPage() {
   const events = eventsQuery.data?.items ?? [];
   const venues = venuesQuery.data?.items ?? [];
   const zones = zonesQuery.data?.items ?? [];
+
   const total = checkpointsQuery.data?.total ?? checkpoints.length;
   const totalPages = checkpointsQuery.data?.totalPages ?? 1;
 
@@ -156,11 +173,14 @@ export default function CheckpointsPage() {
 
   function openCreateModal() {
     setSelectedCheckpoint(null);
+    setPendingAction(null);
+    setPendingValues(null);
+
     form.reset({
       eventId: eventFilter || "",
       venueId: venueFilter || "",
       zoneId: zoneFilter || "",
-      type: "ENTRY_GATE",
+      type: "ENTRY",
       nameAr: "",
       nameEn: "",
       code: "",
@@ -168,11 +188,15 @@ export default function CheckpointsPage() {
       isActive: true,
       sortOrder: 1,
     });
+
     setFormModalOpen(true);
   }
 
   function openEditModal(checkpoint: Checkpoint) {
     setSelectedCheckpoint(checkpoint);
+    setPendingAction(null);
+    setPendingValues(null);
+
     form.reset({
       eventId: checkpoint.eventId,
       venueId: checkpoint.venueId,
@@ -186,19 +210,23 @@ export default function CheckpointsPage() {
       isActive: checkpoint.isActive,
       sortOrder: checkpoint.sortOrder ?? 1,
     });
+
     setFormModalOpen(true);
   }
 
   function closeFormModal() {
     if (isSubmitting) return;
+
     setFormModalOpen(false);
     setSelectedCheckpoint(null);
     setPendingValues(null);
+    setPendingAction(null);
     form.reset();
   }
 
   function closeConfirm() {
     if (isSubmitting) return;
+
     setConfirmOpen(false);
     setPendingAction(null);
     setPendingValues(null);
@@ -213,6 +241,7 @@ export default function CheckpointsPage() {
   function requestDelete(checkpoint: Checkpoint) {
     setSelectedCheckpoint(checkpoint);
     setPendingAction("delete");
+    setPendingValues(null);
     setConfirmOpen(true);
   }
 
@@ -303,19 +332,26 @@ export default function CheckpointsPage() {
     }
   }
 
+  function clearFilters() {
+    setPage(1);
+    setEventFilter("");
+    setVenueFilter("");
+    setZoneFilter("");
+  }
+
   const confirmTitle =
     pendingAction === "create"
-      ? "تأكيد إضافة نقطة الدخول"
+      ? "تأكيد إضافة نقطة المسح"
       : pendingAction === "update"
-        ? "تأكيد تعديل نقطة الدخول"
-        : "تأكيد حذف نقطة الدخول";
+        ? "تأكيد تعديل نقطة المسح"
+        : "تأكيد حذف نقطة المسح";
 
   const confirmDescription =
     pendingAction === "create"
-      ? "سيتم إضافة نقطة دخول جديدة وربطها بالفعالية والمكان والمنطقة المحددة."
+      ? "سيتم إضافة نقطة مسح جديدة وربطها بالفعالية والمكان والمنطقة المحددة."
       : pendingAction === "update"
-        ? `سيتم تعديل بيانات نقطة الدخول: ${selectedCheckpoint?.nameAr ?? ""}.`
-        : `سيتم حذف نقطة الدخول: ${
+        ? `سيتم تعديل بيانات نقطة المسح: ${selectedCheckpoint?.nameAr ?? ""}.`
+        : `سيتم حذف نقطة المسح: ${
             selectedCheckpoint?.nameAr ?? ""
           }. تأكد من عدم اعتماد جهاز سكانر عليها قبل المتابعة.`;
 
@@ -323,8 +359,8 @@ export default function CheckpointsPage() {
     <div className="space-y-6">
       <PageHeader
         eyebrow="Checkpoints Management"
-        title="إدارة نقاط الدخول"
-        description="إدارة بوابات الدخول والخروج ونقاط التحقق المرتبطة بالمناطق، وهي الأساس الذي سيستخدمه السكانر لاحقًا."
+        title="إدارة نقاط المسح"
+        description="إدارة بوابات الدخول والخروج والنقاط الداخلية داخل المعرض، وهي الأساس الذي سيستخدمه السكانر لتتبع حركة الزوار."
         actions={
           <Button onClick={openCreateModal}>
             <Plus className="h-4 w-4" />
@@ -335,9 +371,13 @@ export default function CheckpointsPage() {
 
       <section className="grid gap-4 md:grid-cols-3">
         <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">إجمالي النقاط</p>
+          <p className="text-sm font-bold text-[#4B4B4B]/60">
+            إجمالي نقاط المسح
+          </p>
+
           <div className="mt-3 flex items-center justify-between">
             <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <ScanLine className="h-6 w-6" />
             </div>
@@ -346,6 +386,7 @@ export default function CheckpointsPage() {
 
         <Card className="p-5">
           <p className="text-sm font-bold text-[#4B4B4B]/60">نتائج الصفحة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
             {checkpoints.length}
           </h3>
@@ -353,6 +394,7 @@ export default function CheckpointsPage() {
 
         <Card className="p-5">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
+
           <div className="mt-3">
             <Badge
               variant={checkpointsQuery.isFetching ? "warning" : "success"}
@@ -365,15 +407,28 @@ export default function CheckpointsPage() {
 
       <Card>
         <CardContent>
-          <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            <div>
-              <CardTitle>قائمة نقاط الدخول</CardTitle>
-              <CardDescription>
-                فلتر حسب الفعالية والمكان والمنطقة، ثم أضف أو عدّل نقاط الدخول.
-              </CardDescription>
+          <div className="mb-6 flex flex-col gap-4">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <CardTitle>قائمة نقاط المسح</CardTitle>
+                <CardDescription>
+                  فلتر حسب الفعالية والمكان والمنطقة، ثم أضف أو عدّل نقاط المسح.
+                </CardDescription>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={clearFilters}>
+                  مسح الفلاتر
+                </Button>
+
+                <Button variant="outline" onClick={openCreateModal}>
+                  <Plus className="h-4 w-4" />
+                  نقطة جديدة
+                </Button>
+              </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[220px_220px_220px_auto]">
+            <div className="grid gap-3 md:grid-cols-3">
               <Select
                 value={eventFilter}
                 placeholder="كل الفعاليات"
@@ -426,11 +481,6 @@ export default function CheckpointsPage() {
                   })),
                 ]}
               />
-
-              <Button variant="outline" onClick={openCreateModal}>
-                <Plus className="h-4 w-4" />
-                نقطة جديدة
-              </Button>
             </div>
           </div>
 
@@ -438,8 +488,9 @@ export default function CheckpointsPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
-                  جاري تحميل نقاط الدخول...
+                  جاري تحميل نقاط المسح...
                 </p>
               </div>
             </div>
@@ -447,8 +498,9 @@ export default function CheckpointsPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-red-200 bg-red-50">
               <div className="text-center">
                 <p className="text-lg font-extrabold text-red-700">
-                  تعذر تحميل نقاط الدخول
+                  تعذر تحميل نقاط المسح
                 </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -464,12 +516,15 @@ export default function CheckpointsPage() {
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
                   <DoorOpen className="h-7 w-7" />
                 </div>
+
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد نقاط دخول بعد
+                  لا توجد نقاط مسح بعد
                 </p>
+
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف أول نقطة دخول حتى تصبح جاهزة للربط مع الأجهزة والسكانر.
+                  أضف أول نقطة مسح حتى تصبح جاهزة للربط مع الأجهزة والسكانر.
                 </p>
+
                 <Button className="mt-5" onClick={openCreateModal}>
                   <Plus className="h-4 w-4" />
                   إضافة نقطة
@@ -497,9 +552,11 @@ export default function CheckpointsPage() {
                       <TableCell>
                         <div>
                           <p className="font-extrabold">{checkpoint.nameAr}</p>
+
                           <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
                             {checkpoint.nameEn}
                           </p>
+
                           <p className="mt-1 text-xs font-bold text-[#A88042]">
                             {getEventTitle(checkpoint.eventId)}
                           </p>
@@ -522,6 +579,7 @@ export default function CheckpointsPage() {
                           <p className="font-bold">
                             {getVenueTitle(checkpoint.venueId)}
                           </p>
+
                           <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
                             {getZoneTitle(checkpoint.zoneId)}
                           </p>
@@ -607,13 +665,11 @@ export default function CheckpointsPage() {
       <Modal
         open={formModalOpen}
         onClose={closeFormModal}
-        title={
-          selectedCheckpoint ? "تعديل نقطة الدخول" : "إضافة نقطة دخول جديدة"
-        }
+        title={selectedCheckpoint ? "تعديل نقطة المسح" : "إضافة نقطة مسح جديدة"}
         description={
           selectedCheckpoint
-            ? "عدّل بيانات نقطة الدخول ثم أكّد العملية قبل الحفظ."
-            : "أدخل بيانات نقطة الدخول واربطها بالفعالية والمكان والمنطقة."
+            ? "عدّل بيانات نقطة المسح ثم أكّد العملية قبل الحفظ."
+            : "أدخل بيانات نقطة المسح واربطها بالفعالية والمكان والمنطقة."
         }
         className="max-w-3xl"
         footer={
@@ -625,6 +681,7 @@ export default function CheckpointsPage() {
             >
               إلغاء
             </Button>
+
             <Button
               onClick={form.handleSubmit(requestSubmit)}
               disabled={isSubmitting}
@@ -649,10 +706,12 @@ export default function CheckpointsPage() {
                 shouldDirty: true,
                 shouldValidate: true,
               });
+
               form.setValue("venueId", "", {
                 shouldDirty: true,
                 shouldValidate: true,
               });
+
               form.setValue("zoneId", "", {
                 shouldDirty: true,
                 shouldValidate: true,
@@ -676,6 +735,7 @@ export default function CheckpointsPage() {
                 shouldDirty: true,
                 shouldValidate: true,
               });
+
               form.setValue("zoneId", "", {
                 shouldDirty: true,
                 shouldValidate: true,
@@ -707,7 +767,7 @@ export default function CheckpointsPage() {
           />
 
           <Select
-            label="نوع النقطة"
+            label="نوع نقطة المسح"
             value={form.watch("type")}
             error={form.formState.errors.type?.message}
             onChange={(value) => {
@@ -716,32 +776,26 @@ export default function CheckpointsPage() {
                 shouldValidate: true,
               });
             }}
-            options={[
-              { label: "بوابة دخول", value: "ENTRY_GATE" },
-              { label: "بوابة خروج", value: "EXIT_GATE" },
-              { label: "مكتب تسجيل", value: "REGISTRATION_DESK" },
-              { label: "مكتب معلومات", value: "INFO_DESK" },
-              { label: "أخرى", value: "OTHER" },
-            ]}
+            options={checkpointTypeOptions}
           />
 
           <Input
             label="كود النقطة"
-            placeholder="MAIN_GATE"
+            placeholder="MAIN_ENTRANCE"
             error={form.formState.errors.code?.message}
             {...form.register("code")}
           />
 
           <Input
             label="اسم النقطة بالعربي"
-            placeholder="مثال: البوابة الرئيسية"
+            placeholder="مثال: بوابة الدخول الرئيسية"
             error={form.formState.errors.nameAr?.message}
             {...form.register("nameAr")}
           />
 
           <Input
             label="اسم النقطة بالإنجليزي"
-            placeholder="Main Gate"
+            placeholder="Main Entrance"
             error={form.formState.errors.nameEn?.message}
             {...form.register("nameEn")}
           />
@@ -769,10 +823,29 @@ export default function CheckpointsPage() {
               className="h-5 w-5 accent-[#A88042]"
               {...form.register("isActive")}
             />
+
             <span className="text-sm font-extrabold text-[#4B4B4B]">
-              نقطة الدخول فعّالة
+              نقطة المسح فعّالة
             </span>
           </label>
+
+          <div className="rounded-2xl border border-[#A88042]/20 bg-[#A88042]/5 p-4 lg:col-span-2">
+            <div className="flex gap-3">
+              <MapPinned className="mt-1 h-5 w-5 shrink-0 text-[#A88042]" />
+
+              <div>
+                <p className="text-sm font-extrabold text-[#4B4B4B]">
+                  ملاحظة تشغيلية
+                </p>
+
+                <p className="mt-1 text-xs font-bold leading-6 text-[#4B4B4B]/60">
+                  استخدم ENTRY للبوابة الرئيسية، INTERNAL_POINT للنقاط داخل
+                  المعرض، و EXIT لبوابة الخروج. لاحقًا سيظهر أثر كل Scan ضمن
+                  تتبع حركة الزائر.
+                </p>
+              </div>
+            </div>
+          </div>
         </form>
       </Modal>
 

@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { useState } from "react";
+import { KeyboardEvent, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useLogin } from "@/features/auth/use-login";
 import { LoginFormValues, loginSchema } from "@/features/auth/auth.schema";
@@ -30,9 +30,18 @@ export default function LoginPage() {
     },
   });
 
-  const onSubmit = (values: LoginFormValues) => {
+  const handleLogin = form.handleSubmit((values) => {
     loginMutation.mutate(values);
-  };
+  });
+
+  function handleEnterLogin(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    handleLogin();
+  }
 
   return (
     <main className="relative h-screen overflow-hidden bg-[#F8F8FF] text-[#4B4B4B]">
@@ -117,9 +126,11 @@ export default function LoginPage() {
               <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-black text-xl font-extrabold text-[#A88042]">
                 C
               </div>
+
               <h1 className="text-xl font-extrabold text-[#4B4B4B]">
                 Creative Group
               </h1>
+
               <p className="mt-1 text-xs font-bold text-[#A88042]">
                 For Event Services
               </p>
@@ -145,10 +156,7 @@ export default function LoginPage() {
                 </p>
               </div>
 
-              <form
-                onSubmit={form.handleSubmit(onSubmit)}
-                className="space-y-4"
-              >
+              <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-extrabold text-[#4B4B4B]">
                     البريد الإلكتروني أو رقم الهاتف
@@ -162,6 +170,8 @@ export default function LoginPage() {
                       className="h-[48px] w-full rounded-2xl border border-black/10 bg-[#F8F8FF] pr-12 pl-4 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/35 focus:border-[#A88042] focus:bg-white focus:ring-4 focus:ring-[#A88042]/10"
                       placeholder="admin@example.com"
                       autoComplete="username"
+                      inputMode="email"
+                      onKeyDown={handleEnterLogin}
                     />
                   </div>
 
@@ -186,6 +196,7 @@ export default function LoginPage() {
                       placeholder="••••••••"
                       type={showPassword ? "text" : "password"}
                       autoComplete="current-password"
+                      onKeyDown={handleEnterLogin}
                     />
 
                     <button
@@ -209,8 +220,9 @@ export default function LoginPage() {
                 </div>
 
                 <button
-                  type="submit"
+                  type="button"
                   disabled={loginMutation.isPending}
+                  onClick={() => handleLogin()}
                   className="flex h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-[#A88042] px-5 text-sm font-extrabold text-white shadow-lg shadow-[#A88042]/25 transition hover:bg-[#8F6D37] focus:outline-none focus:ring-4 focus:ring-[#A88042]/15 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loginMutation.isPending ? (
@@ -220,7 +232,7 @@ export default function LoginPage() {
                   )}
                   دخول إلى النظام
                 </button>
-              </form>
+              </div>
 
               <div className="mt-5 rounded-2xl border border-[#A88042]/20 bg-[#A88042]/5 p-3">
                 <div className="flex items-start gap-3">
@@ -232,6 +244,7 @@ export default function LoginPage() {
                     <p className="text-sm font-extrabold text-[#4B4B4B]">
                       دخول آمن للوحة الإدارة
                     </p>
+
                     <p className="mt-1 text-xs font-bold leading-5 text-[#4B4B4B]/55">
                       الطلبات الإدارية تستخدم Bearer Token، وتطبيق السكانر
                       يستخدم Device API Key منفصل.

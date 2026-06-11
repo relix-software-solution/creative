@@ -10,10 +10,10 @@ export const deviceClient = axios.create({
 });
 
 deviceClient.interceptors.request.use((config) => {
-  const deviceApiKey = useDeviceStore.getState().deviceApiKey;
+  const apiKey = useDeviceStore.getState().deviceApiKey;
 
-  if (deviceApiKey) {
-    config.headers["X-Device-Api-Key"] = deviceApiKey;
+  if (apiKey) {
+    config.headers.set("X-Device-Api-Key", apiKey);
   }
 
   return config;

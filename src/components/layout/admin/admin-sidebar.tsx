@@ -8,6 +8,7 @@ import {
   Building2,
   CalendarDays,
   ClipboardList,
+  Clock3,
   DoorOpen,
   FileInput,
   Home,
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   Tags,
   UploadCloud,
+  UserCheck,
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
@@ -56,7 +58,14 @@ const navigationGroups = [
     title: "التشغيل",
     items: [
       { title: "الأجهزة", href: "/devices", icon: MonitorSmartphone },
+      {
+        title: "تكليفات الموظفين",
+        href: "/staff-assignments",
+        icon: UserCheck,
+      },
+      { title: "جلسات الموظفين", href: "/staff-sessions", icon: Clock3 },
       { title: "السكانر", href: "/scanner", icon: QrCode },
+      { title: "إدارة QR", href: "/qr", icon: QrCode },
     ],
   },
   {

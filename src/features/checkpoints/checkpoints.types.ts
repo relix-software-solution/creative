@@ -1,8 +1,11 @@
 export type CheckpointType =
-  | "ENTRY_GATE"
-  | "EXIT_GATE"
-  | "REGISTRATION_DESK"
-  | "INFO_DESK"
+  | "ENTRY"
+  | "EXIT"
+  | "BOTH"
+  | "SESSION_ROOM"
+  | "VIP_AREA"
+  | "INTERNAL_POINT"
+  | "WORKSHOP_AREA"
   | "OTHER";
 
 export type Checkpoint = {
