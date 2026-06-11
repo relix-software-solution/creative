@@ -2,7 +2,9 @@ import { z } from "zod";
 
 export const checkpointSchema = z.object({
   eventId: z.string().min(1, "الفعالية مطلوبة"),
+
   venueId: z.string().min(1, "المكان مطلوب"),
+
   zoneId: z.string().min(1, "المنطقة مطلوبة"),
 
   type: z.enum(
@@ -21,9 +23,11 @@ export const checkpointSchema = z.object({
     },
   ),
 
-  nameAr: z.string().min(1, "اسم النقطة بالعربي مطلوب"),
-  nameEn: z.string().min(1, "اسم النقطة بالإنجليزي مطلوب"),
-  code: z.string().min(1, "كود النقطة مطلوب"),
+  nameAr: z.string().trim().min(1, "اسم النقطة بالعربي مطلوب"),
+
+  nameEn: z.string().trim().min(1, "اسم النقطة بالإنجليزي مطلوب"),
+
+  code: z.string().trim().min(1, "كود النقطة مطلوب"),
 
   allowedAttendeeTypes: z
     .string()

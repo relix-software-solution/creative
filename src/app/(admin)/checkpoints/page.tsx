@@ -7,10 +7,11 @@ import {
   Loader2,
   MapPinned,
   Plus,
+  RefreshCcw,
   ScanLine,
   Trash2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmitHandler, useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,8 @@ import { useZones } from "@/features/zones/zones.queries";
 
 type PendingAction = "create" | "update" | "delete" | null;
 
+const PAGE_LIMIT = 20;
+
 const checkpointTypeLabels: Record<CheckpointType, string> = {
   ENTRY: "دخول",
   EXIT: "خروج",
@@ -76,6 +79,21 @@ const checkpointTypeOptions = [
   { label: "أخرى", value: "OTHER" },
 ] satisfies { label: string; value: CheckpointType }[];
 
+function normalizePayload(values: CheckpointFormValues) {
+  return {
+    eventId: values.eventId,
+    venueId: values.venueId,
+    zoneId: values.zoneId,
+    type: values.type,
+    nameAr: values.nameAr.trim(),
+    nameEn: values.nameEn.trim(),
+    code: values.code.trim().toUpperCase().replace(/\s+/g, "_"),
+    allowedAttendeeTypes: values.allowedAttendeeTypes,
+    isActive: values.isActive,
+    sortOrder: Number(values.sortOrder),
+  };
+}
+
 export default function CheckpointsPage() {
   const [page, setPage] = useState(1);
   const [eventFilter, setEventFilter] = useState("");
@@ -95,7 +113,7 @@ export default function CheckpointsPage() {
   const checkpointsParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
       venueId: venueFilter || undefined,
       zoneId: zoneFilter || undefined,
@@ -171,6 +189,16 @@ export default function CheckpointsPage() {
     updateCheckpointMutation.isPending ||
     deleteCheckpointMutation.isPending;
 
+  const isFiltering = Boolean(eventFilter || venueFilter || zoneFilter);
+
+  useEffect(() => {
+    if (!checkpointsQuery.isSuccess) return;
+
+    if (checkpoints.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [checkpoints.length, checkpointsQuery.isSuccess, page]);
+
   function openCreateModal() {
     setSelectedCheckpoint(null);
     setPendingAction(null);
@@ -232,6 +260,13 @@ export default function CheckpointsPage() {
     setPendingValues(null);
   }
 
+  function clearFilters() {
+    setPage(1);
+    setEventFilter("");
+    setVenueFilter("");
+    setZoneFilter("");
+  }
+
   const requestSubmit: SubmitHandler<CheckpointFormValues> = (values) => {
     setPendingValues(values);
     setPendingAction(selectedCheckpoint ? "update" : "create");
@@ -243,21 +278,6 @@ export default function CheckpointsPage() {
     setPendingAction("delete");
     setPendingValues(null);
     setConfirmOpen(true);
-  }
-
-  function normalizePayload(values: CheckpointFormValues) {
-    return {
-      eventId: values.eventId,
-      venueId: values.venueId,
-      zoneId: values.zoneId,
-      type: values.type,
-      nameAr: values.nameAr.trim(),
-      nameEn: values.nameEn.trim(),
-      code: values.code.trim().toUpperCase().replace(/\s+/g, "_"),
-      allowedAttendeeTypes: values.allowedAttendeeTypes,
-      isActive: values.isActive,
-      sortOrder: Number(values.sortOrder),
-    };
   }
 
   function getEventTitle(eventId: string) {
@@ -332,13 +352,6 @@ export default function CheckpointsPage() {
     }
   }
 
-  function clearFilters() {
-    setPage(1);
-    setEventFilter("");
-    setVenueFilter("");
-    setZoneFilter("");
-  }
-
   const confirmTitle =
     pendingAction === "create"
       ? "تأكيد إضافة نقطة المسح"
@@ -351,12 +364,19 @@ export default function CheckpointsPage() {
       ? "سيتم إضافة نقطة مسح جديدة وربطها بالفعالية والمكان والمنطقة المحددة."
       : pendingAction === "update"
         ? `سيتم تعديل بيانات نقطة المسح: ${selectedCheckpoint?.nameAr ?? ""}.`
-        : `سيتم حذف نقطة المسح: ${
+        : `سيتم تعطيل نقطة المسح: ${
             selectedCheckpoint?.nameAr ?? ""
-          }. تأكد من عدم اعتماد جهاز سكانر عليها قبل المتابعة.`;
+          }. سيتم إخفاؤها من القائمة مع الحفاظ على سجلات المسح والحركة.`;
+
+  const confirmText =
+    pendingAction === "create"
+      ? "تأكيد الإضافة"
+      : pendingAction === "update"
+        ? "تأكيد التعديل"
+        : "تأكيد الحذف";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Checkpoints Management"
         title="إدارة نقاط المسح"
@@ -370,13 +390,15 @@ export default function CheckpointsPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-3">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">
             إجمالي نقاط المسح
           </p>
 
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {checkpointsQuery.isLoading ? "..." : total}
+            </h3>
 
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <ScanLine className="h-6 w-6" />
@@ -384,103 +406,130 @@ export default function CheckpointsPage() {
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">نتائج الصفحة</p>
 
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {checkpoints.length}
+            {checkpointsQuery.isLoading ? "..." : checkpoints.length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
 
-          <div className="mt-3">
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge
               variant={checkpointsQuery.isFetching ? "warning" : "success"}
             >
               {checkpointsQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => checkpointsQuery.refetch()}
+              disabled={checkpointsQuery.isFetching}
+            >
+              <RefreshCcw
+                className={`h-4 w-4 ${
+                  checkpointsQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
-          <div className="mb-6 flex flex-col gap-4">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div>
-                <CardTitle>قائمة نقاط المسح</CardTitle>
-                <CardDescription>
-                  فلتر حسب الفعالية والمكان والمنطقة، ثم أضف أو عدّل نقاط المسح.
-                </CardDescription>
-              </div>
+          <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <CardTitle>قائمة نقاط المسح</CardTitle>
 
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={clearFilters}>
-                  مسح الفلاتر
-                </Button>
-
-                <Button variant="outline" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  نقطة جديدة
-                </Button>
-              </div>
+              <CardDescription>
+                فلتر حسب الفعالية والمكان والمنطقة، ثم أضف أو عدّل نقاط المسح.
+              </CardDescription>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
-              <Select
-                value={eventFilter}
-                placeholder="كل الفعاليات"
-                onChange={(value) => {
-                  setPage(1);
-                  setEventFilter(value);
-                  setVenueFilter("");
-                  setZoneFilter("");
-                }}
-                options={[
-                  { label: "كل الفعاليات", value: "" },
-                  ...events.map((event) => ({
-                    label: event.titleAr,
-                    value: event.id,
-                  })),
-                ]}
-              />
+            <div className="flex w-full items-center gap-3 overflow-x-auto pb-1 xl:w-auto">
+              <div className="min-w-[220px]">
+                <Select
+                  value={eventFilter}
+                  placeholder="كل الفعاليات"
+                  onChange={(value) => {
+                    setPage(1);
+                    setEventFilter(value);
+                    setVenueFilter("");
+                    setZoneFilter("");
+                  }}
+                  options={[
+                    { label: "كل الفعاليات", value: "" },
+                    ...events.map((event) => ({
+                      label: event.titleAr,
+                      value: event.id,
+                    })),
+                  ]}
+                />
+              </div>
 
-              <Select
-                value={venueFilter}
-                placeholder="كل الأماكن"
-                disabled={!eventFilter}
-                onChange={(value) => {
-                  setPage(1);
-                  setVenueFilter(value);
-                  setZoneFilter("");
-                }}
-                options={[
-                  { label: "كل الأماكن", value: "" },
-                  ...venues.map((venue) => ({
-                    label: venue.nameAr,
-                    value: venue.id,
-                  })),
-                ]}
-              />
+              <div className="min-w-[220px]">
+                <Select
+                  value={venueFilter}
+                  placeholder="كل الأماكن"
+                  disabled={!eventFilter}
+                  onChange={(value) => {
+                    setPage(1);
+                    setVenueFilter(value);
+                    setZoneFilter("");
+                  }}
+                  options={[
+                    { label: "كل الأماكن", value: "" },
+                    ...venues.map((venue) => ({
+                      label: venue.nameAr,
+                      value: venue.id,
+                    })),
+                  ]}
+                />
+              </div>
 
-              <Select
-                value={zoneFilter}
-                placeholder="كل المناطق"
-                disabled={!venueFilter}
-                onChange={(value) => {
-                  setPage(1);
-                  setZoneFilter(value);
-                }}
-                options={[
-                  { label: "كل المناطق", value: "" },
-                  ...zones.map((zone) => ({
-                    label: zone.nameAr,
-                    value: zone.id,
-                  })),
-                ]}
-              />
+              <div className="min-w-[220px]">
+                <Select
+                  value={zoneFilter}
+                  placeholder="كل المناطق"
+                  disabled={!venueFilter}
+                  onChange={(value) => {
+                    setPage(1);
+                    setZoneFilter(value);
+                  }}
+                  options={[
+                    { label: "كل المناطق", value: "" },
+                    ...zones.map((zone) => ({
+                      label: zone.nameAr,
+                      value: zone.id,
+                    })),
+                  ]}
+                />
+              </div>
+
+              {isFiltering ? (
+                <Button
+                  className="shrink-0"
+                  variant="outline"
+                  onClick={clearFilters}
+                >
+                  مسح
+                </Button>
+              ) : null}
+
+              <Button
+                className="shrink-0"
+                variant="outline"
+                onClick={openCreateModal}
+              >
+                <Plus className="h-4 w-4" />
+                نقطة جديدة
+              </Button>
             </div>
           </div>
 
@@ -501,6 +550,10 @@ export default function CheckpointsPage() {
                   تعذر تحميل نقاط المسح
                 </p>
 
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
+                </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -518,131 +571,159 @@ export default function CheckpointsPage() {
                 </div>
 
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد نقاط مسح بعد
+                  {isFiltering
+                    ? "لا توجد نقاط مسح مطابقة"
+                    : "لا توجد نقاط مسح بعد"}
                 </p>
 
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف أول نقطة مسح حتى تصبح جاهزة للربط مع الأجهزة والسكانر.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها لعرض كل نقاط المسح."
+                    : "أضف أول نقطة مسح حتى تصبح جاهزة للربط مع الأجهزة والسكانر."}
                 </p>
 
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  إضافة نقطة
-                </Button>
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    إضافة نقطة
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>النقطة</TableHead>
-                    <TableHead>النوع</TableHead>
-                    <TableHead>الكود</TableHead>
-                    <TableHead>المكان / المنطقة</TableHead>
-                    <TableHead>أنواع الحضور</TableHead>
-                    <TableHead>الحالة</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {checkpoints.map((checkpoint) => (
-                    <TableRow key={checkpoint.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">{checkpoint.nameAr}</p>
-
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {checkpoint.nameEn}
-                          </p>
-
-                          <p className="mt-1 text-xs font-bold text-[#A88042]">
-                            {getEventTitle(checkpoint.eventId)}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="gold">
-                          {checkpointTypeLabels[checkpoint.type] ??
-                            checkpoint.type}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="black">{checkpoint.code}</Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <div>
-                          <p className="font-bold">
-                            {getVenueTitle(checkpoint.venueId)}
-                          </p>
-
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {getZoneTitle(checkpoint.zoneId)}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {checkpoint.allowedAttendeeTypes?.length ? (
-                            checkpoint.allowedAttendeeTypes.map((type) => (
-                              <Badge key={type} variant="muted">
-                                {type}
-                              </Badge>
-                            ))
-                          ) : (
-                            <span>—</span>
-                          )}
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge
-                          variant={checkpoint.isActive ? "success" : "danger"}
-                        >
-                          {checkpoint.isActive ? "فعّالة" : "معطّلة"}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditModal(checkpoint)}
-                          >
-                            <Edit className="h-4 w-4" />
-                            تعديل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() => requestDelete(checkpoint)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            حذف
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead>النقطة</TableHead>
+                      <TableHead>النوع</TableHead>
+                      <TableHead>الكود</TableHead>
+                      <TableHead>المكان / المنطقة</TableHead>
+                      <TableHead>أنواع الحضور</TableHead>
+                      <TableHead>الحالة</TableHead>
+                      <TableHead>الإجراءات</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {checkpoints.map((checkpoint) => (
+                      <TableRow key={checkpoint.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-extrabold text-[#4B4B4B]">
+                              {checkpoint.nameAr}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
+                              {checkpoint.nameEn}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#A88042]">
+                              {getEventTitle(checkpoint.eventId)}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/35">
+                              ID: {checkpoint.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge variant="gold">
+                            {checkpointTypeLabels[checkpoint.type] ??
+                              checkpoint.type}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge variant="black">{checkpoint.code}</Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <div>
+                            <p className="font-bold text-[#4B4B4B]">
+                              {getVenueTitle(checkpoint.venueId)}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
+                              {getZoneTitle(checkpoint.zoneId)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {checkpoint.allowedAttendeeTypes?.length ? (
+                              checkpoint.allowedAttendeeTypes.map((type) => (
+                                <Badge key={type} variant="muted">
+                                  {type}
+                                </Badge>
+                              ))
+                            ) : (
+                              <span>—</span>
+                            )}
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge
+                            variant={checkpoint.isActive ? "success" : "danger"}
+                          >
+                            {checkpoint.isActive ? "فعّالة" : "معطّلة"}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openEditModal(checkpoint)}
+                              disabled={isSubmitting}
+                            >
+                              <Edit className="h-4 w-4" />
+                              تعديل
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => requestDelete(checkpoint)}
+                              disabled={isSubmitting}
+                            >
+                              {deleteCheckpointMutation.isPending &&
+                              selectedCheckpoint?.id === checkpoint.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                              حذف
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {checkpoints.length} من
+                  أصل {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || checkpointsQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -650,8 +731,10 @@ export default function CheckpointsPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || checkpointsQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -686,6 +769,9 @@ export default function CheckpointsPage() {
               onClick={form.handleSubmit(requestSubmit)}
               disabled={isSubmitting}
             >
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
               {selectedCheckpoint ? "متابعة التعديل" : "متابعة الإضافة"}
             </Button>
           </>
@@ -783,6 +869,7 @@ export default function CheckpointsPage() {
             label="كود النقطة"
             placeholder="MAIN_ENTRANCE"
             error={form.formState.errors.code?.message}
+            disabled={isSubmitting}
             {...form.register("code")}
           />
 
@@ -790,6 +877,7 @@ export default function CheckpointsPage() {
             label="اسم النقطة بالعربي"
             placeholder="مثال: بوابة الدخول الرئيسية"
             error={form.formState.errors.nameAr?.message}
+            disabled={isSubmitting}
             {...form.register("nameAr")}
           />
 
@@ -797,6 +885,7 @@ export default function CheckpointsPage() {
             label="اسم النقطة بالإنجليزي"
             placeholder="Main Entrance"
             error={form.formState.errors.nameEn?.message}
+            disabled={isSubmitting}
             {...form.register("nameEn")}
           />
 
@@ -804,6 +893,7 @@ export default function CheckpointsPage() {
             label="أنواع الحضور المسموحة"
             placeholder="VISITOR, VIP"
             error={form.formState.errors.allowedAttendeeTypes?.message}
+            disabled={isSubmitting}
             {...form.register("allowedAttendeeTypes")}
           />
 
@@ -812,6 +902,7 @@ export default function CheckpointsPage() {
             type="number"
             min={0}
             error={form.formState.errors.sortOrder?.message}
+            disabled={isSubmitting}
             {...form.register("sortOrder", {
               valueAsNumber: true,
             })}
@@ -821,6 +912,7 @@ export default function CheckpointsPage() {
             <input
               type="checkbox"
               className="h-5 w-5 accent-[#A88042]"
+              disabled={isSubmitting}
               {...form.register("isActive")}
             />
 
@@ -853,13 +945,7 @@ export default function CheckpointsPage() {
         open={confirmOpen}
         title={confirmTitle}
         description={confirmDescription}
-        confirmText={
-          pendingAction === "create"
-            ? "تأكيد الإضافة"
-            : pendingAction === "update"
-              ? "تأكيد التعديل"
-              : "تأكيد الحذف"
-        }
+        confirmText={confirmText}
         variant={pendingAction === "delete" ? "danger" : "gold"}
         isLoading={isSubmitting}
         onClose={closeConfirm}

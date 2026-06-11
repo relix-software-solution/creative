@@ -8,6 +8,7 @@ import {
 } from "./checkpoints.api";
 import {
   CheckpointsListParams,
+  CheckpointsListResponse,
   CreateCheckpointPayload,
   UpdateCheckpointPayload,
 } from "./checkpoints.types";
@@ -21,18 +22,29 @@ export const checkpointsKeys = {
 
 function getErrorMessage(error: unknown) {
   if (error && typeof error === "object" && "response" in error) {
-    const response = error as {
-      response?: {
-        data?: {
-          message?: string | string[];
+    const response = (
+      error as {
+        response?: {
+          data?: {
+            message?: string | string[];
+          };
         };
-      };
-    };
+      }
+    ).response;
 
-    const message = response.response?.data?.message;
+    const message = response?.data?.message;
 
-    if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
-    if (typeof message === "string") return message;
+    if (Array.isArray(message)) {
+      return message[0] ?? "حدث خطأ غير متوقع";
+    }
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
   return "حدث خطأ غير متوقع";
@@ -42,6 +54,7 @@ export function useCheckpoints(params: CheckpointsListParams) {
   return useQuery({
     queryKey: checkpointsKeys.list(params),
     queryFn: () => getCheckpoints(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -52,8 +65,11 @@ export function useCreateCheckpoint() {
     mutationFn: (payload: CreateCheckpointPayload) => createCheckpoint(payload),
 
     onSuccess: () => {
-      toast.success("تم إضافة نقطة الدخول بنجاح");
-      queryClient.invalidateQueries({ queryKey: checkpointsKeys.lists() });
+      toast.success("تم إضافة نقطة المسح بنجاح");
+
+      queryClient.invalidateQueries({
+        queryKey: checkpointsKeys.lists(),
+      });
     },
 
     onError: (error) => {
@@ -75,8 +91,11 @@ export function useUpdateCheckpoint() {
     }) => updateCheckpoint(id, payload),
 
     onSuccess: () => {
-      toast.success("تم تعديل نقطة الدخول بنجاح");
-      queryClient.invalidateQueries({ queryKey: checkpointsKeys.lists() });
+      toast.success("تم تعديل نقطة المسح بنجاح");
+
+      queryClient.invalidateQueries({
+        queryKey: checkpointsKeys.lists(),
+      });
     },
 
     onError: (error) => {
@@ -91,9 +110,36 @@ export function useDeleteCheckpoint() {
   return useMutation({
     mutationFn: (id: string) => deleteCheckpoint(id),
 
-    onSuccess: () => {
-      toast.success("تم حذف نقطة الدخول بنجاح");
-      queryClient.invalidateQueries({ queryKey: checkpointsKeys.lists() });
+    onSuccess: ({ id }) => {
+      toast.success("تم حذف نقطة المسح بنجاح");
+
+      queryClient.setQueriesData<CheckpointsListResponse>(
+        {
+          queryKey: checkpointsKeys.lists(),
+        },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          const nextItems = oldData.items.filter(
+            (checkpoint) => checkpoint.id !== id,
+          );
+
+          const currentTotal = oldData.total ?? oldData.items.length;
+          const nextTotal = Math.max(currentTotal - 1, 0);
+          const limit = oldData.limit || 20;
+
+          return {
+            ...oldData,
+            items: nextItems,
+            total: nextTotal,
+            totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+          };
+        },
+      );
+
+      queryClient.invalidateQueries({
+        queryKey: checkpointsKeys.lists(),
+      });
     },
 
     onError: (error) => {
