@@ -7,12 +7,13 @@ import {
   Edit,
   Loader2,
   Plus,
+  RefreshCcw,
   Search,
   Trash2,
   UserCheck,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,8 @@ type PendingAction =
   | "block"
   | null;
 
+const PAGE_LIMIT = 20;
+
 const statusLabels: Record<string, string> = {
   PENDING: "بانتظار التفعيل",
   ACTIVE: "فعّال",
@@ -81,23 +84,45 @@ function getStatusVariant(
 function formatDate(value?: string | null) {
   if (!value) return "—";
 
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "—";
+
   return new Intl.DateTimeFormat("ar-SY", {
     year: "numeric",
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function stringifyCustomFields(value?: Record<string, unknown> | null) {
   if (!value || Object.keys(value).length === 0) return "";
+
   return JSON.stringify(value, null, 2);
 }
 
 function parseCustomFields(value?: string) {
   if (!value || !value.trim()) return {};
+
   return JSON.parse(value) as Record<string, unknown>;
+}
+
+function normalizePayload(values: RegistrationFormValues) {
+  return {
+    eventId: values.eventId,
+    attendeeTypeId: values.attendeeTypeId,
+    fullName: values.fullName.trim(),
+    phone: values.phone?.trim() || undefined,
+    email: values.email?.trim() || undefined,
+    companyName: values.companyName?.trim() || undefined,
+    jobTitle: values.jobTitle?.trim() || undefined,
+    externalId: values.externalId?.trim() || undefined,
+    customFields: parseCustomFields(values.customFieldsJson),
+    notes: values.notes?.trim() || undefined,
+    source: "ADMIN" as const,
+  };
 }
 
 export default function RegistrationsPage() {
@@ -111,15 +136,17 @@ export default function RegistrationsPage() {
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+
   const [selectedRegistration, setSelectedRegistration] =
     useState<Registration | null>(null);
+
   const [pendingValues, setPendingValues] =
     useState<RegistrationFormValues | null>(null);
 
   const registrationsParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
       attendeeTypeId: attendeeTypeFilter || undefined,
       status: statusFilter || undefined,
@@ -184,8 +211,23 @@ export default function RegistrationsPage() {
     cancelRegistrationMutation.isPending ||
     blockRegistrationMutation.isPending;
 
+  const isFiltering = Boolean(
+    eventFilter || attendeeTypeFilter || statusFilter || search,
+  );
+
+  useEffect(() => {
+    if (!registrationsQuery.isSuccess) return;
+
+    if (registrations.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [registrations.length, registrationsQuery.isSuccess, page]);
+
   function openCreateModal() {
     setSelectedRegistration(null);
+    setPendingAction(null);
+    setPendingValues(null);
+
     form.reset({
       eventId: eventFilter || "",
       attendeeTypeId: attendeeTypeFilter || "",
@@ -198,11 +240,15 @@ export default function RegistrationsPage() {
       notes: "",
       customFieldsJson: "",
     });
+
     setFormModalOpen(true);
   }
 
   function openEditModal(registration: Registration) {
     setSelectedRegistration(registration);
+    setPendingAction(null);
+    setPendingValues(null);
+
     form.reset({
       eventId: registration.eventId,
       attendeeTypeId: registration.attendeeTypeId,
@@ -215,19 +261,23 @@ export default function RegistrationsPage() {
       notes: registration.notes ?? "",
       customFieldsJson: stringifyCustomFields(registration.customFields),
     });
+
     setFormModalOpen(true);
   }
 
   function closeFormModal() {
     if (isSubmitting) return;
+
     setFormModalOpen(false);
     setSelectedRegistration(null);
     setPendingValues(null);
+    setPendingAction(null);
     form.reset();
   }
 
   function closeConfirm() {
     if (isSubmitting) return;
+
     setConfirmOpen(false);
     setPendingAction(null);
     setPendingValues(null);
@@ -255,24 +305,9 @@ export default function RegistrationsPage() {
 
   function requestAction(action: PendingAction, registration: Registration) {
     setSelectedRegistration(registration);
+    setPendingValues(null);
     setPendingAction(action);
     setConfirmOpen(true);
-  }
-
-  function normalizePayload(values: RegistrationFormValues) {
-    return {
-      eventId: values.eventId,
-      attendeeTypeId: values.attendeeTypeId,
-      fullName: values.fullName.trim(),
-      phone: values.phone?.trim() || undefined,
-      email: values.email?.trim() || undefined,
-      companyName: values.companyName?.trim() || undefined,
-      jobTitle: values.jobTitle?.trim() || undefined,
-      externalId: values.externalId?.trim() || undefined,
-      customFields: parseCustomFields(values.customFieldsJson),
-      notes: values.notes?.trim() || undefined,
-      source: "ADMIN" as const,
-    };
   }
 
   function getEventTitle(eventId: string) {
@@ -303,6 +338,7 @@ export default function RegistrationsPage() {
           setSelectedRegistration(null);
         },
       });
+
       return;
     }
 
@@ -313,6 +349,7 @@ export default function RegistrationsPage() {
           setSelectedRegistration(null);
         },
       });
+
       return;
     }
 
@@ -323,6 +360,7 @@ export default function RegistrationsPage() {
           setSelectedRegistration(null);
         },
       });
+
       return;
     }
 
@@ -333,6 +371,7 @@ export default function RegistrationsPage() {
           setSelectedRegistration(null);
         },
       });
+
       return;
     }
 
@@ -353,6 +392,7 @@ export default function RegistrationsPage() {
           },
         },
       );
+
       return;
     }
 
@@ -385,17 +425,30 @@ export default function RegistrationsPage() {
       : pendingAction === "update"
         ? `سيتم تعديل بيانات التسجيل: ${selectedRegistration?.fullName ?? ""}.`
         : pendingAction === "delete"
-          ? `سيتم حذف التسجيل: ${
+          ? `سيتم أرشفة التسجيل: ${
               selectedRegistration?.fullName ?? ""
-            }. تأكد قبل المتابعة.`
+            }. سيختفي من القائمة وسيتم إلغاء QR فعال إن وجد.`
           : pendingAction === "activate"
             ? `سيتم تفعيل التسجيل: ${selectedRegistration?.fullName ?? ""}.`
             : pendingAction === "cancel"
               ? `سيتم إلغاء التسجيل: ${selectedRegistration?.fullName ?? ""}.`
               : `سيتم حظر التسجيل: ${selectedRegistration?.fullName ?? ""}.`;
 
+  const confirmText =
+    pendingAction === "create"
+      ? "تأكيد الإضافة"
+      : pendingAction === "update"
+        ? "تأكيد التعديل"
+        : pendingAction === "delete"
+          ? "تأكيد الحذف"
+          : pendingAction === "activate"
+            ? "تأكيد التفعيل"
+            : pendingAction === "cancel"
+              ? "تأكيد الإلغاء"
+              : "تأكيد الحظر";
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Registrations"
         title="إدارة التسجيلات"
@@ -409,55 +462,85 @@ export default function RegistrationsPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-3">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">
             إجمالي التسجيلات
           </p>
+
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {registrationsQuery.isLoading ? "..." : total}
+            </h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <UserCheck className="h-6 w-6" />
             </div>
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">نتائج الصفحة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {registrations.length}
+            {registrationsQuery.isLoading ? "..." : registrations.length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
-          <div className="mt-3">
+
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge
               variant={registrationsQuery.isFetching ? "warning" : "success"}
             >
               {registrationsQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => registrationsQuery.refetch()}
+              disabled={registrationsQuery.isFetching}
+            >
+              <RefreshCcw
+                className={`h-4 w-4 ${
+                  registrationsQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
-          <div className="mb-6 flex flex-col gap-4">
+          <div className="mb-6 space-y-4">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <CardTitle>قائمة التسجيلات</CardTitle>
+
                 <CardDescription>
                   فلتر حسب الفعالية ونوع الحضور والحالة، أو ابحث بالاسم والهاتف
                   والبريد.
                 </CardDescription>
               </div>
 
-              <Button variant="outline" onClick={clearFilters}>
-                مسح الفلاتر
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                {isFiltering ? (
+                  <Button variant="outline" onClick={clearFilters}>
+                    مسح الفلاتر
+                  </Button>
+                ) : null}
+
+                <Button variant="outline" onClick={openCreateModal}>
+                  <Plus className="h-4 w-4" />
+                  تسجيل جديد
+                </Button>
+              </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-[220px_220px_170px_1fr_auto]">
+            <div className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.4fr)_auto] items-center gap-3">
               <Select
                 value={eventFilter}
                 placeholder="كل الفعاليات"
@@ -518,7 +601,11 @@ export default function RegistrationsPage() {
                 icon={<Search className="h-5 w-5" />}
               />
 
-              <Button variant="secondary" onClick={handleSearch}>
+              <Button
+                className="shrink-0 px-8"
+                variant="secondary"
+                onClick={handleSearch}
+              >
                 بحث
               </Button>
             </div>
@@ -528,6 +615,7 @@ export default function RegistrationsPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل التسجيلات...
                 </p>
@@ -539,9 +627,11 @@ export default function RegistrationsPage() {
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل التسجيلات
                 </p>
+
                 <p className="mt-2 text-sm font-bold text-red-600/70">
                   تحقق من الاتصال أو صلاحية الجلسة.
                 </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -557,156 +647,217 @@ export default function RegistrationsPage() {
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
                   <UserCheck className="h-7 w-7" />
                 </div>
+
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد تسجيلات بعد
+                  {isFiltering
+                    ? "لا توجد تسجيلات مطابقة"
+                    : "لا توجد تسجيلات بعد"}
                 </p>
+
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف أول تسجيل، أو استخدم لاحقًا الاستيراد لإضافة تسجيلات دفعة
-                  واحدة.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها لعرض كل التسجيلات."
+                    : "أضف أول تسجيل، أو استخدم لاحقًا الاستيراد لإضافة تسجيلات دفعة واحدة."}
                 </p>
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  إضافة تسجيل
-                </Button>
+
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    إضافة تسجيل
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>المسجل</TableHead>
-                    <TableHead>الفعالية</TableHead>
-                    <TableHead>نوع الحضور</TableHead>
-                    <TableHead>التواصل</TableHead>
-                    <TableHead>الشركة</TableHead>
-                    <TableHead>الحالة</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {registrations.map((registration) => (
-                    <TableRow key={registration.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">
-                            {registration.fullName}
-                          </p>
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {registration.externalId ||
-                              registration.id.slice(0, 8)}
-                          </p>
-                          <p className="mt-1 text-xs font-bold text-[#A88042]">
-                            {formatDate(registration.createdAt)}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        {getEventTitle(registration.eventId)}
-                      </TableCell>
-
-                      <TableCell>
-                        {getAttendeeTypeTitle(registration.attendeeTypeId)}
-                      </TableCell>
-
-                      <TableCell>
-                        <div>
-                          <p dir="ltr" className="text-right">
-                            {registration.phone || "—"}
-                          </p>
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {registration.email || "—"}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <div>
-                          <p>{registration.companyName || "—"}</p>
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {registration.jobTitle || "—"}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant={getStatusVariant(registration.status)}>
-                          {statusLabels[registration.status ?? ""] ||
-                            registration.status ||
-                            "—"}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditModal(registration)}
-                          >
-                            <Edit className="h-4 w-4" />
-                            تعديل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              requestAction("activate", registration)
-                            }
-                          >
-                            <CheckCircle2 className="h-4 w-4" />
-                            تفعيل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              requestAction("cancel", registration)
-                            }
-                          >
-                            <XCircle className="h-4 w-4" />
-                            إلغاء
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => requestAction("block", registration)}
-                          >
-                            <Ban className="h-4 w-4" />
-                            حظر
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() =>
-                              requestAction("delete", registration)
-                            }
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            حذف
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table className="w-full table-fixed">
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead className="w-[18%]">المسجل</TableHead>
+                      <TableHead className="w-[16%]">الفعالية</TableHead>
+                      <TableHead className="w-[13%]">نوع الحضور</TableHead>
+                      <TableHead className="w-[17%]">التواصل</TableHead>
+                      <TableHead className="w-[13%]">الشركة</TableHead>
+                      <TableHead className="w-[9%]">الحالة</TableHead>
+                      <TableHead className="w-[14%] text-center">
+                        الإجراءات
+                      </TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {registrations.map((registration) => (
+                      <TableRow key={registration.id}>
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate font-extrabold text-[#4B4B4B]">
+                              {registration.fullName}
+                            </p>
+
+                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                              {registration.externalId ||
+                                registration.id.slice(0, 8)}
+                            </p>
+
+                            <p className="mt-1 truncate text-xs font-bold text-[#A88042]">
+                              {formatDate(registration.createdAt)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {getEventTitle(registration.eventId)}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {getAttendeeTypeTitle(registration.attendeeTypeId)}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p dir="ltr" className="truncate text-right">
+                              {registration.phone || "—"}
+                            </p>
+
+                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                              {registration.email || "—"}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate">
+                              {registration.companyName || "—"}
+                            </p>
+
+                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                              {registration.jobTitle || "—"}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <Badge
+                            variant={getStatusVariant(registration.status)}
+                          >
+                            {statusLabels[registration.status ?? ""] ||
+                              registration.status ||
+                              "—"}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="flex flex-nowrap items-center justify-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="تعديل"
+                              aria-label="تعديل"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() => openEditModal(registration)}
+                              disabled={isSubmitting}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="تفعيل"
+                              aria-label="تفعيل"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() =>
+                                requestAction("activate", registration)
+                              }
+                              disabled={
+                                isSubmitting || registration.status === "ACTIVE"
+                              }
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="إلغاء"
+                              aria-label="إلغاء"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() =>
+                                requestAction("cancel", registration)
+                              }
+                              disabled={
+                                isSubmitting ||
+                                registration.status === "CANCELLED"
+                              }
+                            >
+                              <XCircle className="h-4 w-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="حظر"
+                              aria-label="حظر"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() =>
+                                requestAction("block", registration)
+                              }
+                              disabled={
+                                isSubmitting ||
+                                registration.status === "BLOCKED"
+                              }
+                            >
+                              <Ban className="h-4 w-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              title="حذف"
+                              aria-label="حذف"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() =>
+                                requestAction("delete", registration)
+                              }
+                              disabled={isSubmitting}
+                            >
+                              {deleteRegistrationMutation.isPending &&
+                              selectedRegistration?.id === registration.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {registrations.length} من
+                  أصل {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || registrationsQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -714,8 +865,12 @@ export default function RegistrationsPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={
+                      page >= totalPages || registrationsQuery.isFetching
+                    }
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -745,10 +900,14 @@ export default function RegistrationsPage() {
             >
               إلغاء
             </Button>
+
             <Button
               onClick={form.handleSubmit(requestSubmit)}
               disabled={isSubmitting}
             >
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
               {selectedRegistration ? "متابعة التعديل" : "متابعة الإضافة"}
             </Button>
           </>
@@ -769,6 +928,7 @@ export default function RegistrationsPage() {
                 shouldDirty: true,
                 shouldValidate: true,
               });
+
               form.setValue("attendeeTypeId", "", {
                 shouldDirty: true,
                 shouldValidate: true,
@@ -803,6 +963,7 @@ export default function RegistrationsPage() {
             label="الاسم الكامل"
             placeholder="مثال: محمد أحمد"
             error={form.formState.errors.fullName?.message}
+            disabled={isSubmitting}
             {...form.register("fullName")}
           />
 
@@ -810,6 +971,7 @@ export default function RegistrationsPage() {
             label="رقم الهاتف"
             placeholder="+963944123456"
             error={form.formState.errors.phone?.message}
+            disabled={isSubmitting}
             {...form.register("phone")}
           />
 
@@ -817,6 +979,7 @@ export default function RegistrationsPage() {
             label="البريد الإلكتروني"
             placeholder="visitor@example.com"
             error={form.formState.errors.email?.message}
+            disabled={isSubmitting}
             {...form.register("email")}
           />
 
@@ -824,6 +987,7 @@ export default function RegistrationsPage() {
             label="الشركة"
             placeholder="Example Co"
             error={form.formState.errors.companyName?.message}
+            disabled={isSubmitting}
             {...form.register("companyName")}
           />
 
@@ -831,6 +995,7 @@ export default function RegistrationsPage() {
             label="المسمى الوظيفي"
             placeholder="Manager"
             error={form.formState.errors.jobTitle?.message}
+            disabled={isSubmitting}
             {...form.register("jobTitle")}
           />
 
@@ -838,6 +1003,7 @@ export default function RegistrationsPage() {
             label="External ID"
             placeholder="REG-001"
             error={form.formState.errors.externalId?.message}
+            disabled={isSubmitting}
             {...form.register("externalId")}
           />
 
@@ -845,13 +1011,16 @@ export default function RegistrationsPage() {
             <label className="text-sm font-bold text-[#4B4B4B]">
               الحقول الإضافية JSON
             </label>
+
             <textarea
               {...form.register("customFieldsJson")}
               rows={5}
               dir="ltr"
+              disabled={isSubmitting}
               placeholder={`{\n  "mealPreference": "regular"\n}`}
-              className="custom-scrollbar w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-left font-mono text-sm text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10"
+              className="custom-scrollbar w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-left font-mono text-sm text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
             />
+
             {form.formState.errors.customFieldsJson ? (
               <p className="text-sm font-bold text-red-600">
                 {form.formState.errors.customFieldsJson.message}
@@ -861,11 +1030,13 @@ export default function RegistrationsPage() {
 
           <div className="space-y-2 lg:col-span-2">
             <label className="text-sm font-bold text-[#4B4B4B]">ملاحظات</label>
+
             <textarea
               {...form.register("notes")}
               rows={3}
+              disabled={isSubmitting}
               placeholder="ملاحظات داخلية عن التسجيل..."
-              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10"
+              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
             />
           </div>
         </form>
@@ -875,19 +1046,7 @@ export default function RegistrationsPage() {
         open={confirmOpen}
         title={confirmTitle}
         description={confirmDescription}
-        confirmText={
-          pendingAction === "create"
-            ? "تأكيد الإضافة"
-            : pendingAction === "update"
-              ? "تأكيد التعديل"
-              : pendingAction === "delete"
-                ? "تأكيد الحذف"
-                : pendingAction === "activate"
-                  ? "تأكيد التفعيل"
-                  : pendingAction === "cancel"
-                    ? "تأكيد الإلغاء"
-                    : "تأكيد الحظر"
-        }
+        confirmText={confirmText}
         variant={
           pendingAction === "delete" || pendingAction === "block"
             ? "danger"

@@ -11,7 +11,9 @@ import {
 } from "./registrations.api";
 import {
   CreateRegistrationPayload,
+  Registration,
   RegistrationsListParams,
+  RegistrationsListResponse,
   UpdateRegistrationPayload,
 } from "./registrations.types";
 
@@ -24,21 +26,79 @@ export const registrationsKeys = {
 
 function getErrorMessage(error: unknown) {
   if (error && typeof error === "object" && "response" in error) {
-    const response = error as {
-      response?: {
-        data?: {
-          message?: string | string[];
+    const response = (
+      error as {
+        response?: {
+          data?: {
+            message?: string | string[];
+          };
         };
-      };
-    };
+      }
+    ).response;
 
-    const message = response.response?.data?.message;
+    const message = response?.data?.message;
 
-    if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
-    if (typeof message === "string") return message;
+    if (Array.isArray(message)) {
+      return message[0] ?? "حدث خطأ غير متوقع";
+    }
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
   return "حدث خطأ غير متوقع";
+}
+
+function updateRegistrationInLists(
+  queryClient: ReturnType<typeof useQueryClient>,
+  registration: Registration,
+) {
+  queryClient.setQueriesData<RegistrationsListResponse>(
+    {
+      queryKey: registrationsKeys.lists(),
+    },
+    (oldData) => {
+      if (!oldData) return oldData;
+
+      return {
+        ...oldData,
+        items: oldData.items.map((item) =>
+          item.id === registration.id ? { ...item, ...registration } : item,
+        ),
+      };
+    },
+  );
+}
+
+function removeRegistrationFromLists(
+  queryClient: ReturnType<typeof useQueryClient>,
+  id: string,
+) {
+  queryClient.setQueriesData<RegistrationsListResponse>(
+    {
+      queryKey: registrationsKeys.lists(),
+    },
+    (oldData) => {
+      if (!oldData) return oldData;
+
+      const nextItems = oldData.items.filter((item) => item.id !== id);
+      const currentTotal = oldData.total ?? oldData.items.length;
+      const nextTotal = Math.max(currentTotal - 1, 0);
+      const limit = oldData.limit || 20;
+
+      return {
+        ...oldData,
+        items: nextItems,
+        total: nextTotal,
+        totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+      };
+    },
+  );
 }
 
 function invalidateRegistrations(
@@ -53,6 +113,7 @@ export function useRegistrations(params: RegistrationsListParams) {
   return useQuery({
     queryKey: registrationsKeys.list(params),
     queryFn: () => getRegistrations(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -86,8 +147,9 @@ export function useUpdateRegistration() {
       payload: UpdateRegistrationPayload;
     }) => updateRegistration(id, payload),
 
-    onSuccess: () => {
+    onSuccess: (registration) => {
       toast.success("تم تعديل التسجيل بنجاح");
+      updateRegistrationInLists(queryClient, registration);
       invalidateRegistrations(queryClient);
     },
 
@@ -103,8 +165,9 @@ export function useDeleteRegistration() {
   return useMutation({
     mutationFn: (id: string) => deleteRegistration(id),
 
-    onSuccess: () => {
+    onSuccess: ({ id }) => {
       toast.success("تم حذف التسجيل بنجاح");
+      removeRegistrationFromLists(queryClient, id);
       invalidateRegistrations(queryClient);
     },
 
@@ -120,8 +183,13 @@ export function useActivateRegistration() {
   return useMutation({
     mutationFn: (id: string) => activateRegistration(id),
 
-    onSuccess: () => {
+    onSuccess: ({ registration }) => {
       toast.success("تم تفعيل التسجيل بنجاح");
+
+      if (registration) {
+        updateRegistrationInLists(queryClient, registration);
+      }
+
       invalidateRegistrations(queryClient);
     },
 
@@ -137,8 +205,13 @@ export function useCancelRegistration() {
   return useMutation({
     mutationFn: (id: string) => cancelRegistration(id),
 
-    onSuccess: () => {
+    onSuccess: ({ registration }) => {
       toast.success("تم إلغاء التسجيل بنجاح");
+
+      if (registration) {
+        updateRegistrationInLists(queryClient, registration);
+      }
+
       invalidateRegistrations(queryClient);
     },
 
@@ -154,8 +227,13 @@ export function useBlockRegistration() {
   return useMutation({
     mutationFn: (id: string) => blockRegistration(id),
 
-    onSuccess: () => {
+    onSuccess: ({ registration }) => {
       toast.success("تم حظر التسجيل بنجاح");
+
+      if (registration) {
+        updateRegistrationInLists(queryClient, registration);
+      }
+
       invalidateRegistrations(queryClient);
     },
 

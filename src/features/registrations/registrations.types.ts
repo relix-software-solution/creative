@@ -3,6 +3,7 @@ export type RegistrationStatus =
   | "ACTIVE"
   | "CANCELLED"
   | "BLOCKED"
+  | "ARCHIVED"
   | string;
 
 export type RegistrationSource = "ADMIN" | "PUBLIC" | "IMPORT" | string;
@@ -25,6 +26,10 @@ export type Registration = {
 
   source?: RegistrationSource | null;
   status?: RegistrationStatus | null;
+
+  archivedAt?: string | null;
+  deletedAt?: string | null;
+  isArchived?: boolean;
 
   createdAt?: string;
   updatedAt?: string;

@@ -8,25 +8,76 @@ import {
   UpdateRegistrationPayload,
 } from "./registrations.types";
 
+type RegistrationActionResponse = {
+  id?: string;
+  message?: string;
+  registration?: Registration;
+};
+
+function isVisibleRegistration(registration: Registration) {
+  return (
+    registration.status !== "ARCHIVED" &&
+    registration.isArchived !== true &&
+    !registration.archivedAt &&
+    !registration.deletedAt
+  );
+}
+
 function normalizeRegistrationsList(data: unknown): RegistrationsListResponse {
   const value = unwrapApiData<RegistrationsListResponse | Registration[]>(data);
 
   if (Array.isArray(value)) {
+    const activeItems = value.filter(isVisibleRegistration);
+
     return {
-      items: value,
-      total: value.length,
+      items: activeItems,
+      total: activeItems.length,
       page: 1,
-      limit: value.length,
+      limit: activeItems.length,
       totalPages: 1,
     };
   }
 
+  const items = (value.items ?? []).filter(isVisibleRegistration);
+  const limit = value.limit ?? 20;
+  const total = value.total ?? items.length;
+
   return {
-    items: value.items ?? [],
-    total: value.total,
-    page: value.page,
-    limit: value.limit,
-    totalPages: value.totalPages,
+    items,
+    total,
+    page: value.page ?? 1,
+    limit,
+    totalPages: value.totalPages ?? Math.max(Math.ceil(total / limit), 1),
+  };
+}
+
+function normalizeRegistrationActionResponse(
+  data: unknown,
+  fallbackId: string,
+) {
+  const value = unwrapApiData<RegistrationActionResponse | Registration>(data);
+
+  if (
+    value &&
+    typeof value === "object" &&
+    "registration" in value &&
+    value.registration?.id
+  ) {
+    return {
+      id: value.registration.id,
+      registration: value.registration,
+    };
+  }
+
+  if (value && typeof value === "object" && "id" in value && value.id) {
+    return {
+      id: value.id,
+      registration: value as Registration,
+    };
+  }
+
+  return {
+    id: fallbackId,
   };
 }
 
@@ -40,11 +91,13 @@ export async function getRegistrations(params: RegistrationsListParams) {
 
 export async function getRegistration(id: string) {
   const response = await adminClient.get(`/registrations/${id}`);
+
   return unwrapApiData<Registration>(response.data);
 }
 
 export async function createRegistration(payload: CreateRegistrationPayload) {
   const response = await adminClient.post("/registrations", payload);
+
   return unwrapApiData<Registration>(response.data);
 }
 
@@ -53,25 +106,30 @@ export async function updateRegistration(
   payload: UpdateRegistrationPayload,
 ) {
   const response = await adminClient.patch(`/registrations/${id}`, payload);
+
   return unwrapApiData<Registration>(response.data);
 }
 
 export async function deleteRegistration(id: string) {
   const response = await adminClient.delete(`/registrations/${id}`);
-  return unwrapApiData<Registration>(response.data);
+
+  return normalizeRegistrationActionResponse(response.data, id);
 }
 
 export async function activateRegistration(id: string) {
   const response = await adminClient.post(`/registrations/${id}/activate`);
-  return unwrapApiData<Registration>(response.data);
+
+  return normalizeRegistrationActionResponse(response.data, id);
 }
 
 export async function cancelRegistration(id: string) {
   const response = await adminClient.post(`/registrations/${id}/cancel`);
-  return unwrapApiData<Registration>(response.data);
+
+  return normalizeRegistrationActionResponse(response.data, id);
 }
 
 export async function blockRegistration(id: string) {
   const response = await adminClient.post(`/registrations/${id}/block`);
-  return unwrapApiData<Registration>(response.data);
+
+  return normalizeRegistrationActionResponse(response.data, id);
 }
