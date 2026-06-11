@@ -1,8 +1,16 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Edit, Layers3, Loader2, MapPinned, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  Edit,
+  Layers3,
+  Loader2,
+  MapPinned,
+  Plus,
+  RefreshCcw,
+  Trash2,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmitHandler, useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +50,19 @@ import { Zone } from "@/features/zones/zones.types";
 
 type PendingAction = "create" | "update" | "delete" | null;
 
+const PAGE_LIMIT = 20;
+
+function normalizePayload(values: ZoneFormValues) {
+  return {
+    eventId: values.eventId,
+    venueId: values.venueId,
+    nameAr: values.nameAr.trim(),
+    nameEn: values.nameEn.trim(),
+    code: values.code.trim().toUpperCase().replace(/\s+/g, "_"),
+    sortOrder: Number(values.sortOrder),
+  };
+}
+
 export default function ZonesPage() {
   const [page, setPage] = useState(1);
   const [eventFilter, setEventFilter] = useState("");
@@ -58,7 +79,7 @@ export default function ZonesPage() {
   const zonesParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
       venueId: venueFilter || undefined,
     }),
@@ -66,7 +87,12 @@ export default function ZonesPage() {
   );
 
   const zonesQuery = useZones(zonesParams);
-  const eventsQuery = useEvents({ page: 1, limit: 100 });
+
+  const eventsQuery = useEvents({
+    page: 1,
+    limit: 100,
+  });
+
   const venuesQuery = useVenues({
     page: 1,
     limit: 100,
@@ -110,8 +136,20 @@ export default function ZonesPage() {
     updateZoneMutation.isPending ||
     deleteZoneMutation.isPending;
 
+  const isFiltering = Boolean(eventFilter || venueFilter);
+
+  useEffect(() => {
+    if (!zonesQuery.isSuccess) return;
+
+    if (zones.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [zones.length, zonesQuery.isSuccess, page]);
+
   function openCreateModal() {
     setSelectedZone(null);
+    setPendingValues(null);
+
     form.reset({
       eventId: eventFilter || "",
       venueId: venueFilter || "",
@@ -120,11 +158,14 @@ export default function ZonesPage() {
       code: "",
       sortOrder: 1,
     });
+
     setFormModalOpen(true);
   }
 
   function openEditModal(zone: Zone) {
     setSelectedZone(zone);
+    setPendingValues(null);
+
     form.reset({
       eventId: zone.eventId,
       venueId: zone.venueId,
@@ -133,11 +174,13 @@ export default function ZonesPage() {
       code: zone.code,
       sortOrder: zone.sortOrder ?? 1,
     });
+
     setFormModalOpen(true);
   }
 
   function closeFormModal() {
     if (isSubmitting) return;
+
     setFormModalOpen(false);
     setSelectedZone(null);
     setPendingValues(null);
@@ -146,9 +189,16 @@ export default function ZonesPage() {
 
   function closeConfirm() {
     if (isSubmitting) return;
+
     setConfirmOpen(false);
     setPendingAction(null);
     setPendingValues(null);
+  }
+
+  function clearFilters() {
+    setEventFilter("");
+    setVenueFilter("");
+    setPage(1);
   }
 
   const requestSubmit: SubmitHandler<ZoneFormValues> = (values) => {
@@ -159,19 +209,9 @@ export default function ZonesPage() {
 
   function requestDelete(zone: Zone) {
     setSelectedZone(zone);
+    setPendingValues(null);
     setPendingAction("delete");
     setConfirmOpen(true);
-  }
-
-  function normalizePayload(values: ZoneFormValues) {
-    return {
-      eventId: values.eventId,
-      venueId: values.venueId,
-      nameAr: values.nameAr.trim(),
-      nameEn: values.nameEn.trim(),
-      code: values.code.trim().toUpperCase().replace(/\s+/g, "_"),
-      sortOrder: Number(values.sortOrder),
-    };
   }
 
   function getEventTitle(eventId: string) {
@@ -246,10 +286,17 @@ export default function ZonesPage() {
       ? "سيتم إضافة منطقة جديدة وربطها بالمكان والفعالية المحددين."
       : pendingAction === "update"
         ? `سيتم تعديل بيانات المنطقة: ${selectedZone?.nameAr ?? ""}.`
-        : `سيتم حذف المنطقة: ${selectedZone?.nameAr ?? ""}. تأكد من عدم وجود نقاط دخول مرتبطة بها قبل المتابعة.`;
+        : `سيتم حذف المنطقة: ${selectedZone?.nameAr ?? ""}. لا يمكن حذف المنطقة إذا كانت مرتبطة بمناطق فرعية أو نقاط دخول.`;
+
+  const confirmText =
+    pendingAction === "create"
+      ? "تأكيد الإضافة"
+      : pendingAction === "update"
+        ? "تأكيد التعديل"
+        : "تأكيد الحذف";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Zones Management"
         title="إدارة المناطق"
@@ -263,79 +310,118 @@ export default function ZonesPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-3">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">إجمالي المناطق</p>
+
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {zonesQuery.isLoading ? "..." : total}
+            </h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <Layers3 className="h-6 w-6" />
             </div>
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">نتائج الصفحة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {zones.length}
+            {zonesQuery.isLoading ? "..." : zones.length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
-          <div className="mt-3">
+
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge variant={zonesQuery.isFetching ? "warning" : "success"}>
               {zonesQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => zonesQuery.refetch()}
+              disabled={zonesQuery.isFetching}
+            >
+              <RefreshCcw
+                className={`h-4 w-4 ${
+                  zonesQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
           <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <CardTitle>قائمة المناطق</CardTitle>
+
               <CardDescription>
                 فلتر حسب الفعالية والمكان، ثم أضف أو عدّل المناطق.
               </CardDescription>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[240px_240px_auto]">
-              <Select
-                value={eventFilter}
-                placeholder="كل الفعاليات"
-                onChange={(value) => {
-                  setPage(1);
-                  setEventFilter(value);
-                  setVenueFilter("");
-                }}
-                options={[
-                  { label: "كل الفعاليات", value: "" },
-                  ...events.map((event) => ({
-                    label: event.titleAr,
-                    value: event.id,
-                  })),
-                ]}
-              />
+            <div className="flex w-full items-center gap-3 overflow-x-auto pb-1 xl:w-auto">
+              <div className="min-w-[240px]">
+                <Select
+                  value={eventFilter}
+                  placeholder="كل الفعاليات"
+                  onChange={(value) => {
+                    setPage(1);
+                    setEventFilter(value);
+                    setVenueFilter("");
+                  }}
+                  options={[
+                    { label: "كل الفعاليات", value: "" },
+                    ...events.map((event) => ({
+                      label: event.titleAr,
+                      value: event.id,
+                    })),
+                  ]}
+                />
+              </div>
 
-              <Select
-                value={venueFilter}
-                placeholder="كل الأماكن"
-                disabled={!eventFilter}
-                onChange={(value) => {
-                  setPage(1);
-                  setVenueFilter(value);
-                }}
-                options={[
-                  { label: "كل الأماكن", value: "" },
-                  ...venues.map((venue) => ({
-                    label: venue.nameAr,
-                    value: venue.id,
-                  })),
-                ]}
-              />
+              <div className="min-w-[240px]">
+                <Select
+                  value={venueFilter}
+                  placeholder="كل الأماكن"
+                  disabled={!eventFilter}
+                  onChange={(value) => {
+                    setPage(1);
+                    setVenueFilter(value);
+                  }}
+                  options={[
+                    { label: "كل الأماكن", value: "" },
+                    ...venues.map((venue) => ({
+                      label: venue.nameAr,
+                      value: venue.id,
+                    })),
+                  ]}
+                />
+              </div>
 
-              <Button variant="outline" onClick={openCreateModal}>
+              {isFiltering ? (
+                <Button
+                  className="shrink-0"
+                  variant="outline"
+                  onClick={clearFilters}
+                >
+                  مسح
+                </Button>
+              ) : null}
+
+              <Button
+                className="shrink-0"
+                variant="outline"
+                onClick={openCreateModal}
+              >
                 <Plus className="h-4 w-4" />
                 منطقة جديدة
               </Button>
@@ -346,6 +432,7 @@ export default function ZonesPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل المناطق...
                 </p>
@@ -357,6 +444,11 @@ export default function ZonesPage() {
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل المناطق
                 </p>
+
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
+                </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -372,88 +464,119 @@ export default function ZonesPage() {
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
                   <MapPinned className="h-7 w-7" />
                 </div>
+
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد مناطق بعد
+                  {isFiltering ? "لا توجد مناطق مطابقة" : "لا توجد مناطق بعد"}
                 </p>
+
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف أول منطقة داخل المكان حتى نكمل بعدها نقاط الدخول.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها لعرض كل المناطق."
+                    : "أضف أول منطقة داخل المكان حتى نكمل بعدها نقاط الدخول."}
                 </p>
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  إضافة منطقة
-                </Button>
+
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    إضافة منطقة
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>المنطقة</TableHead>
-                    <TableHead>الكود</TableHead>
-                    <TableHead>الفعالية</TableHead>
-                    <TableHead>المكان</TableHead>
-                    <TableHead>الترتيب</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {zones.map((zone) => (
-                    <TableRow key={zone.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">{zone.nameAr}</p>
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {zone.nameEn}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="black">{zone.code}</Badge>
-                      </TableCell>
-
-                      <TableCell>{getEventTitle(zone.eventId)}</TableCell>
-                      <TableCell>{getVenueTitle(zone.venueId)}</TableCell>
-
-                      <TableCell>{zone.sortOrder}</TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditModal(zone)}
-                          >
-                            <Edit className="h-4 w-4" />
-                            تعديل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() => requestDelete(zone)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            حذف
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead>المنطقة</TableHead>
+                      <TableHead>الكود</TableHead>
+                      <TableHead>الفعالية</TableHead>
+                      <TableHead>المكان</TableHead>
+                      <TableHead>الترتيب</TableHead>
+                      <TableHead>الإجراءات</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {zones.map((zone) => (
+                      <TableRow key={zone.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-extrabold text-[#4B4B4B]">
+                              {zone.nameAr}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
+                              {zone.nameEn}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/35">
+                              ID: {zone.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge variant="black">{zone.code}</Badge>
+                        </TableCell>
+
+                        <TableCell>{getEventTitle(zone.eventId)}</TableCell>
+
+                        <TableCell>{getVenueTitle(zone.venueId)}</TableCell>
+
+                        <TableCell>{zone.sortOrder}</TableCell>
+
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openEditModal(zone)}
+                              disabled={isSubmitting}
+                            >
+                              <Edit className="h-4 w-4" />
+                              تعديل
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => requestDelete(zone)}
+                              disabled={isSubmitting}
+                            >
+                              {deleteZoneMutation.isPending &&
+                              selectedZone?.id === zone.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                              حذف
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {zones.length} من أصل{" "}
+                  {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || zonesQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -461,8 +584,10 @@ export default function ZonesPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || zonesQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -492,10 +617,14 @@ export default function ZonesPage() {
             >
               إلغاء
             </Button>
+
             <Button
               onClick={form.handleSubmit(requestSubmit)}
               disabled={isSubmitting}
             >
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
               {selectedZone ? "متابعة التعديل" : "متابعة الإضافة"}
             </Button>
           </>
@@ -516,6 +645,7 @@ export default function ZonesPage() {
                 shouldDirty: true,
                 shouldValidate: true,
               });
+
               form.setValue("venueId", "", {
                 shouldDirty: true,
                 shouldValidate: true,
@@ -550,6 +680,7 @@ export default function ZonesPage() {
             label="اسم المنطقة بالعربي"
             placeholder="مثال: منطقة الدخول"
             error={form.formState.errors.nameAr?.message}
+            disabled={isSubmitting}
             {...form.register("nameAr")}
           />
 
@@ -557,6 +688,7 @@ export default function ZonesPage() {
             label="اسم المنطقة بالإنجليزي"
             placeholder="Entry Zone"
             error={form.formState.errors.nameEn?.message}
+            disabled={isSubmitting}
             {...form.register("nameEn")}
           />
 
@@ -564,6 +696,7 @@ export default function ZonesPage() {
             label="كود المنطقة"
             placeholder="ENTRY_ZONE"
             error={form.formState.errors.code?.message}
+            disabled={isSubmitting}
             {...form.register("code")}
           />
 
@@ -572,6 +705,7 @@ export default function ZonesPage() {
             type="number"
             min={0}
             error={form.formState.errors.sortOrder?.message}
+            disabled={isSubmitting}
             {...form.register("sortOrder")}
           />
         </form>
@@ -581,13 +715,7 @@ export default function ZonesPage() {
         open={confirmOpen}
         title={confirmTitle}
         description={confirmDescription}
-        confirmText={
-          pendingAction === "create"
-            ? "تأكيد الإضافة"
-            : pendingAction === "update"
-              ? "تأكيد التعديل"
-              : "تأكيد الحذف"
-        }
+        confirmText={confirmText}
         variant={pendingAction === "delete" ? "danger" : "gold"}
         isLoading={isSubmitting}
         onClose={closeConfirm}
