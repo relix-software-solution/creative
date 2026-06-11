@@ -6,10 +6,12 @@ import {
   Edit,
   Loader2,
   Plus,
+  RefreshCcw,
   Search,
   Trash2,
+  X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,6 +50,8 @@ import {
 
 type PendingAction = "create" | "update" | "delete" | null;
 
+const PAGE_LIMIT = 20;
+
 const eventTypeLabels: Record<EventType, string> = {
   EXHIBITION: "معرض",
   CONFERENCE: "مؤتمر",
@@ -75,11 +79,20 @@ function toDatetimeLocal(value?: string | null) {
 
 function toIsoOrUndefined(value?: string) {
   if (!value) return undefined;
-  return new Date(value).toISOString();
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return undefined;
+
+  return date.toISOString();
 }
 
 function formatDate(value?: string | null) {
   if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "—";
 
   return new Intl.DateTimeFormat("ar-SY", {
     year: "numeric",
@@ -87,7 +100,25 @@ function formatDate(value?: string | null) {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
+}
+
+function normalizePayload(values: EventFormValues) {
+  return {
+    clientId: values.clientId,
+    type: values.type,
+    titleAr: values.titleAr.trim(),
+    titleEn: values.titleEn.trim(),
+    descriptionAr: values.descriptionAr?.trim() || undefined,
+    descriptionEn: values.descriptionEn?.trim() || undefined,
+    startsAt: new Date(values.startsAt).toISOString(),
+    endsAt: new Date(values.endsAt).toISOString(),
+    timezone: values.timezone.trim() || "Asia/Damascus",
+    allowReEntry: values.allowReEntry,
+    duplicateStrategy: values.duplicateStrategy,
+    qrValidFrom: toIsoOrUndefined(values.qrValidFrom),
+    qrValidUntil: toIsoOrUndefined(values.qrValidUntil),
+  };
 }
 
 export default function EventsPage() {
@@ -107,7 +138,7 @@ export default function EventsPage() {
   const eventsParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       search: search || undefined,
       clientId: clientFilter || undefined,
     }),
@@ -150,8 +181,20 @@ export default function EventsPage() {
     updateEventMutation.isPending ||
     deleteEventMutation.isPending;
 
+  const isFiltering = Boolean(search || clientFilter);
+
+  useEffect(() => {
+    if (!eventsQuery.isSuccess) return;
+
+    if (events.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [events.length, eventsQuery.isSuccess, page]);
+
   function openCreateModal() {
     setSelectedEvent(null);
+    setPendingValues(null);
+
     form.reset({
       clientId: "",
       type: "EXHIBITION",
@@ -167,11 +210,14 @@ export default function EventsPage() {
       qrValidFrom: "",
       qrValidUntil: "",
     });
+
     setFormModalOpen(true);
   }
 
   function openEditModal(event: EventItem) {
     setSelectedEvent(event);
+    setPendingValues(null);
+
     form.reset({
       clientId: event.clientId,
       type: event.type,
@@ -187,11 +233,13 @@ export default function EventsPage() {
       qrValidFrom: toDatetimeLocal(event.qrValidFrom),
       qrValidUntil: toDatetimeLocal(event.qrValidUntil),
     });
+
     setFormModalOpen(true);
   }
 
   function closeFormModal() {
     if (isSubmitting) return;
+
     setFormModalOpen(false);
     setSelectedEvent(null);
     setPendingValues(null);
@@ -200,6 +248,7 @@ export default function EventsPage() {
 
   function closeConfirm() {
     if (isSubmitting) return;
+
     setConfirmOpen(false);
     setPendingAction(null);
     setPendingValues(null);
@@ -210,6 +259,13 @@ export default function EventsPage() {
     setSearch(searchInput.trim());
   }
 
+  function clearFilters() {
+    setSearchInput("");
+    setSearch("");
+    setClientFilter("");
+    setPage(1);
+  }
+
   function requestSubmit(values: EventFormValues) {
     setPendingValues(values);
     setPendingAction(selectedEvent ? "update" : "create");
@@ -218,26 +274,9 @@ export default function EventsPage() {
 
   function requestDelete(event: EventItem) {
     setSelectedEvent(event);
+    setPendingValues(null);
     setPendingAction("delete");
     setConfirmOpen(true);
-  }
-
-  function normalizePayload(values: EventFormValues) {
-    return {
-      clientId: values.clientId,
-      type: values.type,
-      titleAr: values.titleAr.trim(),
-      titleEn: values.titleEn.trim(),
-      descriptionAr: values.descriptionAr?.trim() || undefined,
-      descriptionEn: values.descriptionEn?.trim() || undefined,
-      startsAt: new Date(values.startsAt).toISOString(),
-      endsAt: new Date(values.endsAt).toISOString(),
-      timezone: values.timezone.trim() || "Asia/Damascus",
-      allowReEntry: values.allowReEntry,
-      duplicateStrategy: values.duplicateStrategy,
-      qrValidFrom: toIsoOrUndefined(values.qrValidFrom),
-      qrValidUntil: toIsoOrUndefined(values.qrValidUntil),
-    };
   }
 
   function confirmAction() {
@@ -295,10 +334,17 @@ export default function EventsPage() {
       ? "سيتم إنشاء فعالية جديدة وربطها بالعميل المحدد."
       : pendingAction === "update"
         ? `سيتم تعديل بيانات الفعالية: ${selectedEvent?.titleAr ?? ""}.`
-        : `سيتم حذف الفعالية: ${selectedEvent?.titleAr ?? ""}. تأكد من عدم وجود بيانات تشغيلية مهمة مرتبطة بها.`;
+        : `سيتم أرشفة الفعالية: ${selectedEvent?.titleAr ?? ""}. الحذف في النظام ليس حذفًا نهائيًا، بل إخفاء وأرشفة للحفاظ على البيانات التشغيلية.`;
+
+  const confirmText =
+    pendingAction === "create"
+      ? "تأكيد الإضافة"
+      : pendingAction === "update"
+        ? "تأكيد التعديل"
+        : "تأكيد الحذف";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Events Management"
         title="إدارة الفعاليات"
@@ -312,75 +358,124 @@ export default function EventsPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-3">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">
             إجمالي الفعاليات
           </p>
+
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {eventsQuery.isLoading ? "..." : total}
+            </h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <CalendarDays className="h-6 w-6" />
             </div>
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">نتائج الصفحة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {events.length}
+            {eventsQuery.isLoading ? "..." : events.length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
-          <div className="mt-3">
+
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge variant={eventsQuery.isFetching ? "warning" : "success"}>
               {eventsQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => eventsQuery.refetch()}
+              disabled={eventsQuery.isFetching}
+            >
+              <RefreshCcw
+                className={`h-4 w-4 ${
+                  eventsQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
           <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <CardTitle>قائمة الفعاليات</CardTitle>
+
               <CardDescription>
                 استعرض الفعاليات وابحث أو فلتر حسب العميل.
               </CardDescription>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-[minmax(240px,1fr)_220px_auto] xl:min-w-[760px]">
-              <Input
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") handleSearch();
-                }}
-                placeholder="ابحث باسم الفعالية..."
-                icon={<Search className="h-5 w-5" />}
-              />
+            <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
+              <div className="relative w-full lg:w-[280px]">
+                <Input
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") handleSearch();
+                  }}
+                  placeholder="ابحث باسم الفعالية..."
+                  icon={<Search className="h-5 w-5" />}
+                />
 
-              <Select
-                value={clientFilter}
-                placeholder="كل العملاء"
-                onChange={(value) => {
-                  setPage(1);
-                  setClientFilter(value);
-                }}
-                options={[
-                  { label: "كل العملاء", value: "" },
-                  ...clients.map((client) => ({
-                    label: client.name,
-                    value: client.id,
-                  })),
-                ]}
-              />
+                {searchInput ? (
+                  <button
+                    type="button"
+                    onClick={() => setSearchInput("")}
+                    className="absolute left-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-[#4B4B4B]/45 transition hover:bg-black/5 hover:text-[#4B4B4B]"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : null}
+              </div>
 
-              <Button variant="secondary" onClick={handleSearch}>
+              <div className="w-full lg:w-[220px]">
+                <Select
+                  value={clientFilter}
+                  placeholder="كل العملاء"
+                  onChange={(value) => {
+                    setPage(1);
+                    setClientFilter(value);
+                  }}
+                  options={[
+                    { label: "كل العملاء", value: "" },
+                    ...clients.map((client) => ({
+                      label: client.name,
+                      value: client.id,
+                    })),
+                  ]}
+                />
+              </div>
+
+              <Button
+                className="w-full lg:w-auto"
+                variant="secondary"
+                onClick={handleSearch}
+              >
                 بحث
               </Button>
+
+              {isFiltering ? (
+                <Button
+                  className="w-full lg:w-auto"
+                  variant="outline"
+                  onClick={clearFilters}
+                >
+                  مسح
+                </Button>
+              ) : null}
             </div>
           </div>
 
@@ -388,6 +483,7 @@ export default function EventsPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل الفعاليات...
                 </p>
@@ -399,6 +495,11 @@ export default function EventsPage() {
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل الفعاليات
                 </p>
+
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
+                </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -414,104 +515,136 @@ export default function EventsPage() {
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
                   <CalendarDays className="h-7 w-7" />
                 </div>
+
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد فعاليات بعد
+                  {isFiltering ? "لا توجد نتائج مطابقة" : "لا توجد فعاليات بعد"}
                 </p>
+
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف أول فعالية حتى نكمل بعدها المواقع والمناطق ونقاط الدخول.
+                  {isFiltering
+                    ? "جرّب تعديل البحث أو مسح الفلاتر لعرض كل الفعاليات."
+                    : "أضف أول فعالية حتى نكمل بعدها المواقع والمناطق ونقاط الدخول."}
                 </p>
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  إضافة فعالية
-                </Button>
+
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    إضافة فعالية
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>الفعالية</TableHead>
-                    <TableHead>العميل</TableHead>
-                    <TableHead>النوع</TableHead>
-                    <TableHead>البداية</TableHead>
-                    <TableHead>النهاية</TableHead>
-                    <TableHead>QR</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {events.map((event) => (
-                    <TableRow key={event.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">{event.titleAr}</p>
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {event.titleEn}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        {event.client?.name ||
-                          clients.find((client) => client.id === event.clientId)
-                            ?.name ||
-                          "—"}
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="gold">
-                          {eventTypeLabels[event.type]}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>{formatDate(event.startsAt)}</TableCell>
-                      <TableCell>{formatDate(event.endsAt)}</TableCell>
-
-                      <TableCell>
-                        <Badge
-                          variant={event.allowReEntry ? "success" : "muted"}
-                        >
-                          {event.allowReEntry ? "يسمح بالعودة" : "دخول مرة"}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditModal(event)}
-                          >
-                            <Edit className="h-4 w-4" />
-                            تعديل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() => requestDelete(event)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            حذف
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead>الفعالية</TableHead>
+                      <TableHead>العميل</TableHead>
+                      <TableHead>النوع</TableHead>
+                      <TableHead>البداية</TableHead>
+                      <TableHead>النهاية</TableHead>
+                      <TableHead>QR</TableHead>
+                      <TableHead>الإجراءات</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {events.map((event) => (
+                      <TableRow key={event.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-extrabold text-[#4B4B4B]">
+                              {event.titleAr}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
+                              {event.titleEn}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/35">
+                              ID: {event.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          {event.client?.name ||
+                            clients.find(
+                              (client) => client.id === event.clientId,
+                            )?.name ||
+                            "—"}
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge variant="gold">
+                            {eventTypeLabels[event.type]}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>{formatDate(event.startsAt)}</TableCell>
+
+                        <TableCell>{formatDate(event.endsAt)}</TableCell>
+
+                        <TableCell>
+                          <Badge
+                            variant={event.allowReEntry ? "success" : "muted"}
+                          >
+                            {event.allowReEntry ? "يسمح بالعودة" : "دخول مرة"}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openEditModal(event)}
+                              disabled={isSubmitting}
+                            >
+                              <Edit className="h-4 w-4" />
+                              تعديل
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => requestDelete(event)}
+                              disabled={isSubmitting}
+                            >
+                              {deleteEventMutation.isPending &&
+                              selectedEvent?.id === event.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                              حذف
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {events.length} من أصل{" "}
+                  {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || eventsQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -519,8 +652,10 @@ export default function EventsPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || eventsQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -550,10 +685,14 @@ export default function EventsPage() {
             >
               إلغاء
             </Button>
+
             <Button
               onClick={form.handleSubmit(requestSubmit)}
               disabled={isSubmitting}
             >
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
               {selectedEvent ? "متابعة التعديل" : "متابعة الإضافة"}
             </Button>
           </>
@@ -585,6 +724,7 @@ export default function EventsPage() {
             label="اسم الفعالية بالعربي"
             placeholder="مثال: معرض دمشق الدولي"
             error={form.formState.errors.titleAr?.message}
+            disabled={isSubmitting}
             {...form.register("titleAr")}
           />
 
@@ -592,6 +732,7 @@ export default function EventsPage() {
             label="اسم الفعالية بالإنجليزي"
             placeholder="Damascus International Fair"
             error={form.formState.errors.titleEn?.message}
+            disabled={isSubmitting}
             {...form.register("titleEn")}
           />
 
@@ -617,6 +758,7 @@ export default function EventsPage() {
             label="المنطقة الزمنية"
             placeholder="Asia/Damascus"
             error={form.formState.errors.timezone?.message}
+            disabled={isSubmitting}
             {...form.register("timezone")}
           />
 
@@ -624,6 +766,7 @@ export default function EventsPage() {
             label="تاريخ البداية"
             type="datetime-local"
             error={form.formState.errors.startsAt?.message}
+            disabled={isSubmitting}
             {...form.register("startsAt")}
           />
 
@@ -631,6 +774,7 @@ export default function EventsPage() {
             label="تاريخ النهاية"
             type="datetime-local"
             error={form.formState.errors.endsAt?.message}
+            disabled={isSubmitting}
             {...form.register("endsAt")}
           />
 
@@ -638,6 +782,7 @@ export default function EventsPage() {
             label="صلاحية QR من"
             type="datetime-local"
             error={form.formState.errors.qrValidFrom?.message}
+            disabled={isSubmitting}
             {...form.register("qrValidFrom")}
           />
 
@@ -645,6 +790,7 @@ export default function EventsPage() {
             label="صلاحية QR حتى"
             type="datetime-local"
             error={form.formState.errors.qrValidUntil?.message}
+            disabled={isSubmitting}
             {...form.register("qrValidUntil")}
           />
 
@@ -672,8 +818,10 @@ export default function EventsPage() {
             <input
               type="checkbox"
               className="h-5 w-5 accent-[#A88042]"
+              disabled={isSubmitting}
               {...form.register("allowReEntry")}
             />
+
             <span className="text-sm font-extrabold text-[#4B4B4B]">
               السماح بإعادة الدخول بنفس QR
             </span>
@@ -683,10 +831,12 @@ export default function EventsPage() {
             <label className="text-sm font-bold text-[#4B4B4B]">
               الوصف العربي
             </label>
+
             <textarea
               {...form.register("descriptionAr")}
               rows={3}
-              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10"
+              disabled={isSubmitting}
+              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
               placeholder="أدخل وصف الفعالية بالعربي..."
             />
           </div>
@@ -695,10 +845,12 @@ export default function EventsPage() {
             <label className="text-sm font-bold text-[#4B4B4B]">
               الوصف الإنجليزي
             </label>
+
             <textarea
               {...form.register("descriptionEn")}
               rows={3}
-              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10"
+              disabled={isSubmitting}
+              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
               placeholder="Enter event description in English..."
             />
           </div>
@@ -709,13 +861,7 @@ export default function EventsPage() {
         open={confirmOpen}
         title={confirmTitle}
         description={confirmDescription}
-        confirmText={
-          pendingAction === "create"
-            ? "تأكيد الإضافة"
-            : pendingAction === "update"
-              ? "تأكيد التعديل"
-              : "تأكيد الحذف"
-        }
+        confirmText={confirmText}
         variant={pendingAction === "delete" ? "danger" : "gold"}
         isLoading={isSubmitting}
         onClose={closeConfirm}

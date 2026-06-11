@@ -4,6 +4,7 @@ import { createEvent, deleteEvent, getEvents, updateEvent } from "./events.api";
 import {
   CreateEventPayload,
   EventsListParams,
+  EventsListResponse,
   UpdateEventPayload,
 } from "./events.types";
 
@@ -27,8 +28,17 @@ function getErrorMessage(error: unknown) {
 
     const message = response?.data?.message;
 
-    if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
-    if (typeof message === "string") return message;
+    if (Array.isArray(message)) {
+      return message[0] ?? "حدث خطأ غير متوقع";
+    }
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
   return "حدث خطأ غير متوقع";
@@ -38,6 +48,7 @@ export function useEvents(params: EventsListParams) {
   return useQuery({
     queryKey: eventsKeys.list(params),
     queryFn: () => getEvents(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -49,7 +60,10 @@ export function useCreateEvent() {
 
     onSuccess: () => {
       toast.success("تم إنشاء الفعالية بنجاح");
-      queryClient.invalidateQueries({ queryKey: eventsKeys.lists() });
+
+      queryClient.invalidateQueries({
+        queryKey: eventsKeys.lists(),
+      });
     },
 
     onError: (error) => {
@@ -72,7 +86,10 @@ export function useUpdateEvent() {
 
     onSuccess: () => {
       toast.success("تم تعديل الفعالية بنجاح");
-      queryClient.invalidateQueries({ queryKey: eventsKeys.lists() });
+
+      queryClient.invalidateQueries({
+        queryKey: eventsKeys.lists(),
+      });
     },
 
     onError: (error) => {
@@ -87,9 +104,33 @@ export function useDeleteEvent() {
   return useMutation({
     mutationFn: (id: string) => deleteEvent(id),
 
-    onSuccess: () => {
+    onSuccess: ({ id }) => {
       toast.success("تم حذف الفعالية بنجاح");
-      queryClient.invalidateQueries({ queryKey: eventsKeys.lists() });
+
+      queryClient.setQueriesData<EventsListResponse>(
+        {
+          queryKey: eventsKeys.lists(),
+        },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          const nextItems = oldData.items.filter((event) => event.id !== id);
+          const currentTotal = oldData.total ?? oldData.items.length;
+          const nextTotal = Math.max(currentTotal - 1, 0);
+          const limit = oldData.limit || 20;
+
+          return {
+            ...oldData,
+            items: nextItems,
+            total: nextTotal,
+            totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+          };
+        },
+      );
+
+      queryClient.invalidateQueries({
+        queryKey: eventsKeys.lists(),
+      });
     },
 
     onError: (error) => {

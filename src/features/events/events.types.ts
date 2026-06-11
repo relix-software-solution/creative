@@ -2,6 +2,14 @@ export type EventType = "EXHIBITION" | "CONFERENCE" | "WORKSHOP" | "OTHER";
 
 export type DuplicateStrategy = "PHONE" | "EMAIL" | "EXTERNAL_ID";
 
+export type EventStatus =
+  | "DRAFT"
+  | "PUBLISHED"
+  | "ACTIVE"
+  | "COMPLETED"
+  | "ARCHIVED"
+  | string;
+
 export type EventItem = {
   id: string;
   clientId: string;
@@ -17,6 +25,8 @@ export type EventItem = {
   duplicateStrategy: DuplicateStrategy;
   qrValidFrom?: string | null;
   qrValidUntil?: string | null;
+  status?: EventStatus;
+  isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
   client?: {
