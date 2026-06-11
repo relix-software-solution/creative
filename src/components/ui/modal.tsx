@@ -54,7 +54,7 @@ export function Modal({
         type="button"
         aria-label="إغلاق"
         onClick={closeOnBackdrop ? onClose : undefined}
-        className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+        className="absolute inset-0 z-0 bg-black/55 backdrop-blur-sm"
       />
 
       <div

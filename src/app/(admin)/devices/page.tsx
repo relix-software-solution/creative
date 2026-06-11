@@ -903,27 +903,6 @@ export default function DevicesPage() {
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-[#4B4B4B]">
-              Metadata JSON
-            </label>
-
-            <textarea
-              {...form.register("metadataJson")}
-              rows={5}
-              dir="ltr"
-              disabled={isDeviceSubmitting}
-              placeholder={`{\n  "platform": "web",\n  "appVersion": "1.0.0"\n}`}
-              className="custom-scrollbar w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-left font-mono text-sm text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
-            />
-
-            {form.formState.errors.metadataJson ? (
-              <p className="text-sm font-bold text-red-600">
-                {form.formState.errors.metadataJson.message}
-              </p>
-            ) : null}
-          </div>
-
           <div className="rounded-2xl border border-[#A88042]/20 bg-[#A88042]/5 p-4">
             <p className="text-sm font-extrabold text-[#4B4B4B]">ملاحظة مهمة</p>
 

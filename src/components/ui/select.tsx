@@ -129,8 +129,9 @@ export function Select({
               top: position.top,
               left: position.left,
               width: position.width,
+              zIndex: 999999,
             }}
-            className="fixed z-[9999] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_24px_70px_rgba(0,0,0,0.14)]"
+            className="fixed overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_24px_70px_rgba(0,0,0,0.14)]"
           >
             <div className="custom-scrollbar max-h-64 overflow-y-auto p-2">
               {options.map((option) => {
