@@ -8,6 +8,7 @@ import {
 } from "./attendee-types.api";
 import {
   AttendeeTypesListParams,
+  AttendeeTypesListResponse,
   CreateAttendeeTypePayload,
   UpdateAttendeeTypePayload,
 } from "./attendee-types.types";
@@ -21,18 +22,29 @@ export const attendeeTypesKeys = {
 
 function getErrorMessage(error: unknown) {
   if (error && typeof error === "object" && "response" in error) {
-    const response = error as {
-      response?: {
-        data?: {
-          message?: string | string[];
+    const response = (
+      error as {
+        response?: {
+          data?: {
+            message?: string | string[];
+          };
         };
-      };
-    };
+      }
+    ).response;
 
-    const message = response.response?.data?.message;
+    const message = response?.data?.message;
 
-    if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
-    if (typeof message === "string") return message;
+    if (Array.isArray(message)) {
+      return message[0] ?? "حدث خطأ غير متوقع";
+    }
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
   return "حدث خطأ غير متوقع";
@@ -42,6 +54,7 @@ export function useAttendeeTypes(params: AttendeeTypesListParams) {
   return useQuery({
     queryKey: attendeeTypesKeys.list(params),
     queryFn: () => getAttendeeTypes(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -54,6 +67,7 @@ export function useCreateAttendeeType() {
 
     onSuccess: () => {
       toast.success("تم إضافة نوع الحضور بنجاح");
+
       queryClient.invalidateQueries({
         queryKey: attendeeTypesKeys.lists(),
       });
@@ -79,6 +93,7 @@ export function useUpdateAttendeeType() {
 
     onSuccess: () => {
       toast.success("تم تعديل نوع الحضور بنجاح");
+
       queryClient.invalidateQueries({
         queryKey: attendeeTypesKeys.lists(),
       });
@@ -96,8 +111,30 @@ export function useDeleteAttendeeType() {
   return useMutation({
     mutationFn: (id: string) => deleteAttendeeType(id),
 
-    onSuccess: () => {
+    onSuccess: ({ id }) => {
       toast.success("تم حذف نوع الحضور بنجاح");
+
+      queryClient.setQueriesData<AttendeeTypesListResponse>(
+        {
+          queryKey: attendeeTypesKeys.lists(),
+        },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          const nextItems = oldData.items.filter((type) => type.id !== id);
+          const currentTotal = oldData.total ?? oldData.items.length;
+          const nextTotal = Math.max(currentTotal - 1, 0);
+          const limit = oldData.limit || 20;
+
+          return {
+            ...oldData,
+            items: nextItems,
+            total: nextTotal,
+            totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+          };
+        },
+      );
+
       queryClient.invalidateQueries({
         queryKey: attendeeTypesKeys.lists(),
       });
