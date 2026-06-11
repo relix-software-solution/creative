@@ -5,6 +5,7 @@ import {
   CreateVenuePayload,
   UpdateVenuePayload,
   VenuesListParams,
+  VenuesListResponse,
 } from "./venues.types";
 
 export const venuesKeys = {
@@ -27,8 +28,17 @@ function getErrorMessage(error: unknown) {
 
     const message = response?.data?.message;
 
-    if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
-    if (typeof message === "string") return message;
+    if (Array.isArray(message)) {
+      return message[0] ?? "حدث خطأ غير متوقع";
+    }
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
   return "حدث خطأ غير متوقع";
@@ -38,6 +48,7 @@ export function useVenues(params: VenuesListParams) {
   return useQuery({
     queryKey: venuesKeys.list(params),
     queryFn: () => getVenues(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -49,7 +60,10 @@ export function useCreateVenue() {
 
     onSuccess: () => {
       toast.success("تم إضافة المكان بنجاح");
-      queryClient.invalidateQueries({ queryKey: venuesKeys.lists() });
+
+      queryClient.invalidateQueries({
+        queryKey: venuesKeys.lists(),
+      });
     },
 
     onError: (error) => {
@@ -72,7 +86,10 @@ export function useUpdateVenue() {
 
     onSuccess: () => {
       toast.success("تم تعديل المكان بنجاح");
-      queryClient.invalidateQueries({ queryKey: venuesKeys.lists() });
+
+      queryClient.invalidateQueries({
+        queryKey: venuesKeys.lists(),
+      });
     },
 
     onError: (error) => {
@@ -87,9 +104,33 @@ export function useDeleteVenue() {
   return useMutation({
     mutationFn: (id: string) => deleteVenue(id),
 
-    onSuccess: () => {
+    onSuccess: ({ id }) => {
       toast.success("تم حذف المكان بنجاح");
-      queryClient.invalidateQueries({ queryKey: venuesKeys.lists() });
+
+      queryClient.setQueriesData<VenuesListResponse>(
+        {
+          queryKey: venuesKeys.lists(),
+        },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          const nextItems = oldData.items.filter((venue) => venue.id !== id);
+          const currentTotal = oldData.total ?? oldData.items.length;
+          const nextTotal = Math.max(currentTotal - 1, 0);
+          const limit = oldData.limit || 20;
+
+          return {
+            ...oldData,
+            items: nextItems,
+            total: nextTotal,
+            totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+          };
+        },
+      );
+
+      queryClient.invalidateQueries({
+        queryKey: venuesKeys.lists(),
+      });
     },
 
     onError: (error) => {

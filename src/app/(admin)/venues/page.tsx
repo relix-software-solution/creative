@@ -1,8 +1,16 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Building2, Edit, Loader2, MapPin, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  Building2,
+  Edit,
+  Loader2,
+  MapPin,
+  Plus,
+  RefreshCcw,
+  Trash2,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +45,20 @@ import { Venue } from "@/features/venues/venues.types";
 
 type PendingAction = "create" | "update" | "delete" | null;
 
+const PAGE_LIMIT = 20;
+
+function normalizePayload(values: VenueFormValues) {
+  return {
+    eventId: values.eventId,
+    nameAr: values.nameAr.trim(),
+    nameEn: values.nameEn.trim(),
+    addressAr: values.addressAr?.trim() || undefined,
+    addressEn: values.addressEn?.trim() || undefined,
+    city: values.city.trim(),
+    country: values.country.trim(),
+  };
+}
+
 export default function VenuesPage() {
   const [page, setPage] = useState(1);
   const [eventFilter, setEventFilter] = useState("");
@@ -52,7 +74,7 @@ export default function VenuesPage() {
   const venuesParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
     }),
     [page, eventFilter],
@@ -88,8 +110,20 @@ export default function VenuesPage() {
     updateVenueMutation.isPending ||
     deleteVenueMutation.isPending;
 
+  const isFiltering = Boolean(eventFilter);
+
+  useEffect(() => {
+    if (!venuesQuery.isSuccess) return;
+
+    if (venues.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [venues.length, venuesQuery.isSuccess, page]);
+
   function openCreateModal() {
     setSelectedVenue(null);
+    setPendingValues(null);
+
     form.reset({
       eventId: eventFilter || "",
       nameAr: "",
@@ -99,11 +133,14 @@ export default function VenuesPage() {
       city: "Damascus",
       country: "Syria",
     });
+
     setFormModalOpen(true);
   }
 
   function openEditModal(venue: Venue) {
     setSelectedVenue(venue);
+    setPendingValues(null);
+
     form.reset({
       eventId: venue.eventId,
       nameAr: venue.nameAr,
@@ -113,11 +150,13 @@ export default function VenuesPage() {
       city: venue.city ?? "",
       country: venue.country ?? "",
     });
+
     setFormModalOpen(true);
   }
 
   function closeFormModal() {
     if (isSubmitting) return;
+
     setFormModalOpen(false);
     setSelectedVenue(null);
     setPendingValues(null);
@@ -126,9 +165,15 @@ export default function VenuesPage() {
 
   function closeConfirm() {
     if (isSubmitting) return;
+
     setConfirmOpen(false);
     setPendingAction(null);
     setPendingValues(null);
+  }
+
+  function clearFilters() {
+    setEventFilter("");
+    setPage(1);
   }
 
   function requestSubmit(values: VenueFormValues) {
@@ -139,20 +184,9 @@ export default function VenuesPage() {
 
   function requestDelete(venue: Venue) {
     setSelectedVenue(venue);
+    setPendingValues(null);
     setPendingAction("delete");
     setConfirmOpen(true);
-  }
-
-  function normalizePayload(values: VenueFormValues) {
-    return {
-      eventId: values.eventId,
-      nameAr: values.nameAr.trim(),
-      nameEn: values.nameEn.trim(),
-      addressAr: values.addressAr?.trim() || undefined,
-      addressEn: values.addressEn?.trim() || undefined,
-      city: values.city.trim(),
-      country: values.country.trim(),
-    };
   }
 
   function confirmAction() {
@@ -218,10 +252,17 @@ export default function VenuesPage() {
       ? "سيتم إضافة مكان جديد وربطه بالفعالية المحددة."
       : pendingAction === "update"
         ? `سيتم تعديل بيانات المكان: ${selectedVenue?.nameAr ?? ""}.`
-        : `سيتم حذف المكان: ${selectedVenue?.nameAr ?? ""}. تأكد من عدم وجود مناطق أو نقاط دخول مرتبطة به قبل المتابعة.`;
+        : `سيتم حذف المكان: ${selectedVenue?.nameAr ?? ""}. لا يمكن حذف المكان إذا كان مرتبطًا بمناطق أو نقاط دخول.`;
+
+  const confirmText =
+    pendingAction === "create"
+      ? "تأكيد الإضافة"
+      : pendingAction === "update"
+        ? "تأكيد التعديل"
+        : "تأكيد الحذف";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Locations Management"
         title="إدارة الأماكن"
@@ -235,61 +276,98 @@ export default function VenuesPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-3">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">إجمالي الأماكن</p>
+
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {venuesQuery.isLoading ? "..." : total}
+            </h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <Building2 className="h-6 w-6" />
             </div>
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">نتائج الصفحة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {venues.length}
+            {venuesQuery.isLoading ? "..." : venues.length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
-          <div className="mt-3">
+
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge variant={venuesQuery.isFetching ? "warning" : "success"}>
               {venuesQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => venuesQuery.refetch()}
+              disabled={venuesQuery.isFetching}
+            >
+              <RefreshCcw
+                className={`h-4 w-4 ${
+                  venuesQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
           <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <CardTitle>قائمة الأماكن</CardTitle>
+
               <CardDescription>
                 فلتر حسب الفعالية، ثم أضف أو عدّل الأماكن المرتبطة بها.
               </CardDescription>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-[260px_auto]">
-              <Select
-                value={eventFilter}
-                placeholder="كل الفعاليات"
-                onChange={(value) => {
-                  setPage(1);
-                  setEventFilter(value);
-                }}
-                options={[
-                  { label: "كل الفعاليات", value: "" },
-                  ...events.map((event) => ({
-                    label: event.titleAr,
-                    value: event.id,
-                  })),
-                ]}
-              />
+            <div className="flex w-full items-center gap-3 overflow-x-auto pb-1 xl:w-auto">
+              <div className="min-w-[260px]">
+                <Select
+                  value={eventFilter}
+                  placeholder="كل الفعاليات"
+                  onChange={(value) => {
+                    setPage(1);
+                    setEventFilter(value);
+                  }}
+                  options={[
+                    { label: "كل الفعاليات", value: "" },
+                    ...events.map((event) => ({
+                      label: event.titleAr,
+                      value: event.id,
+                    })),
+                  ]}
+                />
+              </div>
 
-              <Button variant="outline" onClick={openCreateModal}>
+              {isFiltering ? (
+                <Button
+                  className="shrink-0"
+                  variant="outline"
+                  onClick={clearFilters}
+                >
+                  مسح
+                </Button>
+              ) : null}
+
+              <Button
+                className="shrink-0"
+                variant="outline"
+                onClick={openCreateModal}
+              >
                 <Plus className="h-4 w-4" />
                 مكان جديد
               </Button>
@@ -300,6 +378,7 @@ export default function VenuesPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل الأماكن...
                 </p>
@@ -311,6 +390,11 @@ export default function VenuesPage() {
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل الأماكن
                 </p>
+
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
+                </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -326,88 +410,121 @@ export default function VenuesPage() {
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
                   <MapPin className="h-7 w-7" />
                 </div>
+
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد أماكن بعد
+                  {isFiltering
+                    ? "لا توجد أماكن لهذه الفعالية"
+                    : "لا توجد أماكن بعد"}
                 </p>
+
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف أول مكان للفعالية حتى نكمل بعدها المناطق ونقاط الدخول.
+                  {isFiltering
+                    ? "جرّب اختيار فعالية أخرى أو امسح الفلتر لعرض كل الأماكن."
+                    : "أضف أول مكان للفعالية حتى نكمل بعدها المناطق ونقاط الدخول."}
                 </p>
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  إضافة مكان
-                </Button>
+
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    إضافة مكان
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>المكان</TableHead>
-                    <TableHead>الفعالية</TableHead>
-                    <TableHead>المدينة</TableHead>
-                    <TableHead>الدولة</TableHead>
-                    <TableHead>العنوان</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {venues.map((venue) => (
-                    <TableRow key={venue.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">{venue.nameAr}</p>
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {venue.nameEn}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>{getEventTitle(venue.eventId)}</TableCell>
-
-                      <TableCell>{venue.city || "—"}</TableCell>
-                      <TableCell>{venue.country || "—"}</TableCell>
-
-                      <TableCell className="max-w-[260px] truncate">
-                        {venue.addressAr || venue.addressEn || "—"}
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditModal(venue)}
-                          >
-                            <Edit className="h-4 w-4" />
-                            تعديل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() => requestDelete(venue)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            حذف
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead>المكان</TableHead>
+                      <TableHead>الفعالية</TableHead>
+                      <TableHead>المدينة</TableHead>
+                      <TableHead>الدولة</TableHead>
+                      <TableHead>العنوان</TableHead>
+                      <TableHead>الإجراءات</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {venues.map((venue) => (
+                      <TableRow key={venue.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-extrabold text-[#4B4B4B]">
+                              {venue.nameAr}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
+                              {venue.nameEn}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/35">
+                              ID: {venue.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>{getEventTitle(venue.eventId)}</TableCell>
+
+                        <TableCell>{venue.city || "—"}</TableCell>
+
+                        <TableCell>{venue.country || "—"}</TableCell>
+
+                        <TableCell className="max-w-[260px] truncate">
+                          {venue.addressAr || venue.addressEn || "—"}
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openEditModal(venue)}
+                              disabled={isSubmitting}
+                            >
+                              <Edit className="h-4 w-4" />
+                              تعديل
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => requestDelete(venue)}
+                              disabled={isSubmitting}
+                            >
+                              {deleteVenueMutation.isPending &&
+                              selectedVenue?.id === venue.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                              حذف
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {venues.length} من أصل{" "}
+                  {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || venuesQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -415,8 +532,10 @@ export default function VenuesPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || venuesQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -446,10 +565,14 @@ export default function VenuesPage() {
             >
               إلغاء
             </Button>
+
             <Button
               onClick={form.handleSubmit(requestSubmit)}
               disabled={isSubmitting}
             >
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
               {selectedVenue ? "متابعة التعديل" : "متابعة الإضافة"}
             </Button>
           </>
@@ -481,6 +604,7 @@ export default function VenuesPage() {
             label="اسم المكان بالعربي"
             placeholder="مثال: القاعة الرئيسية"
             error={form.formState.errors.nameAr?.message}
+            disabled={isSubmitting}
             {...form.register("nameAr")}
           />
 
@@ -488,6 +612,7 @@ export default function VenuesPage() {
             label="اسم المكان بالإنجليزي"
             placeholder="Main Hall"
             error={form.formState.errors.nameEn?.message}
+            disabled={isSubmitting}
             {...form.register("nameEn")}
           />
 
@@ -495,6 +620,7 @@ export default function VenuesPage() {
             label="المدينة"
             placeholder="Damascus"
             error={form.formState.errors.city?.message}
+            disabled={isSubmitting}
             {...form.register("city")}
           />
 
@@ -502,6 +628,7 @@ export default function VenuesPage() {
             label="الدولة"
             placeholder="Syria"
             error={form.formState.errors.country?.message}
+            disabled={isSubmitting}
             {...form.register("country")}
           />
 
@@ -509,11 +636,13 @@ export default function VenuesPage() {
             <label className="text-sm font-bold text-[#4B4B4B]">
               العنوان العربي
             </label>
+
             <textarea
               {...form.register("addressAr")}
               rows={3}
+              disabled={isSubmitting}
               placeholder="مثال: دمشق - طريق المطار"
-              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10"
+              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
             />
           </div>
 
@@ -521,11 +650,13 @@ export default function VenuesPage() {
             <label className="text-sm font-bold text-[#4B4B4B]">
               العنوان الإنجليزي
             </label>
+
             <textarea
               {...form.register("addressEn")}
               rows={3}
+              disabled={isSubmitting}
               placeholder="Damascus - Airport Road"
-              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10"
+              className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
             />
           </div>
         </form>
@@ -535,13 +666,7 @@ export default function VenuesPage() {
         open={confirmOpen}
         title={confirmTitle}
         description={confirmDescription}
-        confirmText={
-          pendingAction === "create"
-            ? "تأكيد الإضافة"
-            : pendingAction === "update"
-              ? "تأكيد التعديل"
-              : "تأكيد الحذف"
-        }
+        confirmText={confirmText}
         variant={pendingAction === "delete" ? "danger" : "gold"}
         isLoading={isSubmitting}
         onClose={closeConfirm}

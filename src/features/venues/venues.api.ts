@@ -8,6 +8,12 @@ import {
   VenuesListResponse,
 } from "./venues.types";
 
+type DeleteVenueResponse = {
+  id?: string;
+  message?: string;
+  venue?: Venue;
+};
+
 function normalizeVenuesList(data: unknown): VenuesListResponse {
   const value = unwrapApiData<VenuesListResponse | Venue[]>(data);
 
@@ -21,12 +27,16 @@ function normalizeVenuesList(data: unknown): VenuesListResponse {
     };
   }
 
+  const items = value.items ?? [];
+  const limit = value.limit ?? 20;
+  const total = value.total ?? items.length;
+
   return {
-    items: value.items ?? [],
-    total: value.total,
-    page: value.page,
-    limit: value.limit,
-    totalPages: value.totalPages,
+    items,
+    total,
+    page: value.page ?? 1,
+    limit,
+    totalPages: value.totalPages ?? Math.max(Math.ceil(total / limit), 1),
   };
 }
 
@@ -40,20 +50,40 @@ export async function getVenues(params: VenuesListParams) {
 
 export async function getVenue(id: string) {
   const response = await adminClient.get(`/venues/${id}`);
+
   return unwrapApiData<Venue>(response.data);
 }
 
 export async function createVenue(payload: CreateVenuePayload) {
   const response = await adminClient.post("/venues", payload);
+
   return unwrapApiData<Venue>(response.data);
 }
 
 export async function updateVenue(id: string, payload: UpdateVenuePayload) {
   const response = await adminClient.patch(`/venues/${id}`, payload);
+
   return unwrapApiData<Venue>(response.data);
 }
 
 export async function deleteVenue(id: string) {
   const response = await adminClient.delete(`/venues/${id}`);
-  return unwrapApiData<Venue>(response.data);
+
+  const data = unwrapApiData<DeleteVenueResponse | Venue>(response.data);
+
+  if (data && typeof data === "object" && "venue" in data && data.venue?.id) {
+    return {
+      id: data.venue.id,
+      venue: data.venue,
+    };
+  }
+
+  if (data && typeof data === "object" && "id" in data && data.id) {
+    return {
+      id: data.id,
+      venue: data as Venue,
+    };
+  }
+
+  return { id };
 }
