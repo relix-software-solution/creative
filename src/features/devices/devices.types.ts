@@ -56,3 +56,9 @@ export type DeviceSecretResponse = {
   device: Device;
   rawApiKey: string;
 };
+
+export type DeviceActionResponse = {
+  id?: string;
+  message?: string;
+  device?: Device;
+};

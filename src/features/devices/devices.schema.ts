@@ -13,8 +13,11 @@ function validateJson(value?: string) {
 
 export const deviceSchema = z.object({
   eventId: z.string().min(1, "الفعالية مطلوبة"),
-  name: z.string().min(1, "اسم الجهاز مطلوب"),
-  code: z.string().optional(),
+
+  name: z.string().trim().min(1, "اسم الجهاز مطلوب"),
+
+  code: z.string().trim().optional().or(z.literal("")),
+
   metadataJson: z
     .string()
     .optional()

@@ -16,7 +16,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmitHandler, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +64,7 @@ import {
 } from "@/features/devices/devices.types";
 
 type DeviceModalMode = "create" | "edit";
+
 type PendingAction =
   | "activate"
   | "suspend"
@@ -71,6 +72,8 @@ type PendingAction =
   | "delete"
   | "rotate"
   | null;
+
+const PAGE_LIMIT = 20;
 
 const statusLabels: Record<string, string> = {
   ACTIVE: "فعّال",
@@ -86,11 +89,16 @@ function getStatusVariant(
   if (status === "SUSPENDED") return "warning";
   if (status === "REVOKED") return "danger";
   if (status === "INACTIVE") return "muted";
+
   return "gold";
 }
 
 function formatDate(value?: string | null) {
   if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "—";
 
   return new Intl.DateTimeFormat("ar-SY", {
     year: "numeric",
@@ -98,11 +106,12 @@ function formatDate(value?: string | null) {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function parseMetadata(value?: string) {
   if (!value?.trim()) return undefined;
+
   return JSON.parse(value) as Record<string, unknown>;
 }
 
@@ -154,7 +163,7 @@ export default function DevicesPage() {
   const devicesParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       search: search || undefined,
       eventId: eventFilter || undefined,
       status: statusFilter || undefined,
@@ -198,9 +207,20 @@ export default function DevicesPage() {
     revokeDeviceMutation.isPending ||
     deleteDeviceMutation.isPending;
 
+  const isFiltering = Boolean(search || eventFilter || statusFilter);
+
+  useEffect(() => {
+    if (!devicesQuery.isSuccess) return;
+
+    if (devices.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [devices.length, devicesQuery.isSuccess, page]);
+
   function openCreateModal() {
     setDeviceModalMode("create");
     setSelectedDevice(null);
+
     form.reset({
       eventId: eventFilter || "",
       name: "",
@@ -214,23 +234,27 @@ export default function DevicesPage() {
         2,
       ),
     });
+
     setDeviceModalOpen(true);
   }
 
   function openEditModal(device: Device) {
     setDeviceModalMode("edit");
     setSelectedDevice(device);
+
     form.reset({
       eventId: device.eventId,
       name: device.name ?? "",
       code: device.code ?? "",
       metadataJson: stringifyMetadata(device.metadata),
     });
+
     setDeviceModalOpen(true);
   }
 
   function closeDeviceModal() {
     if (isDeviceSubmitting) return;
+
     setDeviceModalOpen(false);
     setSelectedDevice(null);
     form.reset();
@@ -254,6 +278,7 @@ export default function DevicesPage() {
 
   function closeConfirm() {
     if (isActionSubmitting) return;
+
     setSelectedDevice(null);
     setPendingAction(null);
     setConfirmOpen(false);
@@ -294,6 +319,7 @@ export default function DevicesPage() {
           openSecretModal(response);
         },
       });
+
       return;
     }
 
@@ -301,6 +327,7 @@ export default function DevicesPage() {
       activateDeviceMutation.mutate(selectedDevice.id, {
         onSuccess: closeConfirm,
       });
+
       return;
     }
 
@@ -308,6 +335,7 @@ export default function DevicesPage() {
       suspendDeviceMutation.mutate(selectedDevice.id, {
         onSuccess: closeConfirm,
       });
+
       return;
     }
 
@@ -315,6 +343,7 @@ export default function DevicesPage() {
       revokeDeviceMutation.mutate(selectedDevice.id, {
         onSuccess: closeConfirm,
       });
+
       return;
     }
 
@@ -341,6 +370,14 @@ export default function DevicesPage() {
     setSearch("");
     setEventFilter("");
     setStatusFilter("");
+  }
+
+  function getEventTitle(device: Device) {
+    return (
+      device.event?.titleAr ||
+      events.find((event) => event.id === device.eventId)?.titleAr ||
+      "—"
+    );
   }
 
   function getConfirmCopy() {
@@ -394,7 +431,7 @@ export default function DevicesPage() {
     return {
       title: "حذف الجهاز",
       description:
-        "سيتم حذف/إلغاء الجهاز حسب منطق الباك. لا تستخدم هذا الخيار إلا عند الحاجة.",
+        "سيتم إلغاء الجهاز وإخفاؤه من القائمة. الجهاز لن يستطيع استخدام Device API Key بعد ذلك.",
       confirmText: "حذف",
       variant: "danger" as const,
     };
@@ -403,7 +440,7 @@ export default function DevicesPage() {
   const confirmCopy = getConfirmCopy();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Devices"
         title="إدارة الأجهزة"
@@ -417,69 +454,85 @@ export default function DevicesPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-4">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">إجمالي الأجهزة</p>
+
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {devicesQuery.isLoading ? "..." : total}
+            </h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <Smartphone className="h-6 w-6" />
             </div>
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">فعّالة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {devices.filter((device) => device.status === "ACTIVE").length}
+            {devicesQuery.isLoading
+              ? "..."
+              : devices.filter((device) => device.status === "ACTIVE").length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">موقوفة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {devices.filter((device) => device.status === "SUSPENDED").length}
+            {devicesQuery.isLoading
+              ? "..."
+              : devices.filter((device) => device.status === "SUSPENDED")
+                  .length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
-          <div className="mt-3">
+
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge variant={devicesQuery.isFetching ? "warning" : "success"}>
               {devicesQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => devicesQuery.refetch()}
+              disabled={devicesQuery.isFetching}
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${
+                  devicesQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
-          <div className="mb-6 flex flex-col gap-4">
+          <div className="mb-6 space-y-4">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div>
-                <CardTitle>قائمة الأجهزة</CardTitle>
-                <CardDescription>
-                  كل جهاز يحصل على API Key خاص به لاستخدامه في مسارات
-                  <span className="mx-1 font-extrabold">/device</span>
-                  لاحقًا.
-                </CardDescription>
-              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {isFiltering ? (
+                  <Button variant="outline" onClick={clearFilters}>
+                    مسح الفلاتر
+                  </Button>
+                ) : null}
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => devicesQuery.refetch()}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  تحديث
-                </Button>
-
-                <Button variant="outline" onClick={clearFilters}>
-                  مسح الفلاتر
+                <Button variant="outline" onClick={openCreateModal}>
+                  <Plus className="h-4 w-4" />
+                  جهاز جديد
                 </Button>
               </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-[1fr_260px_200px]">
+            <div className="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)] items-center gap-3">
               <Input
                 value={search}
                 placeholder="بحث باسم الجهاز أو الكود..."
@@ -528,6 +581,7 @@ export default function DevicesPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل الأجهزة...
                 </p>
@@ -539,6 +593,11 @@ export default function DevicesPage() {
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل الأجهزة
                 </p>
+
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
+                </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -556,146 +615,202 @@ export default function DevicesPage() {
                 </div>
 
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد أجهزة
+                  {isFiltering ? "لا توجد أجهزة مطابقة" : "لا توجد أجهزة"}
                 </p>
 
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف جهاز سكانر جديد واربطه بفعالية حتى نستخدمه لاحقًا في
-                  عمليات الدخول والمزامنة.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها لعرض كل الأجهزة."
+                    : "أضف جهاز سكانر جديد واربطه بفعالية حتى نستخدمه لاحقًا في عمليات الدخول والمزامنة."}
                 </p>
 
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  جهاز جديد
-                </Button>
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    جهاز جديد
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>الجهاز</TableHead>
-                    <TableHead>الفعالية</TableHead>
-                    <TableHead>الحالة</TableHead>
-                    <TableHead>آخر ظهور</TableHead>
-                    <TableHead>تاريخ الإنشاء</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table className="w-full table-fixed">
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead className="w-[26%]">الجهاز</TableHead>
+                      <TableHead className="w-[22%]">الفعالية</TableHead>
+                      <TableHead className="w-[12%]">الحالة</TableHead>
+                      <TableHead className="w-[14%]">آخر ظهور</TableHead>
+                      <TableHead className="w-[14%]">تاريخ الإنشاء</TableHead>
+                      <TableHead className="w-[12%] text-center">
+                        الإجراءات
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
 
-                <TableBody>
-                  {devices.map((device) => (
-                    <TableRow key={device.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
-                            <Smartphone className="h-5 w-5" />
+                  <TableBody>
+                    {devices.map((device) => (
+                      <TableRow key={device.id}>
+                        <TableCell className="align-top">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
+                              <Smartphone className="h-5 w-5" />
+                            </div>
+
+                            <div className="min-w-0">
+                              <p className="truncate font-extrabold text-[#4B4B4B]">
+                                {device.name}
+                              </p>
+
+                              <p
+                                dir="ltr"
+                                className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45"
+                              >
+                                {device.code || device.id}
+                              </p>
+                            </div>
                           </div>
+                        </TableCell>
 
-                          <div>
-                            <p className="font-extrabold">{device.name}</p>
-                            <p
-                              dir="ltr"
-                              className="mt-1 text-xs font-bold text-[#4B4B4B]/45"
-                            >
-                              {device.code || device.id}
-                            </p>
-                          </div>
-                        </div>
-                      </TableCell>
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {getEventTitle(device)}
+                          </p>
+                        </TableCell>
 
-                      <TableCell>
-                        {device.event?.titleAr ||
-                          events.find((event) => event.id === device.eventId)
-                            ?.titleAr ||
-                          "—"}
-                      </TableCell>
+                        <TableCell className="align-top">
+                          <Badge variant={getStatusVariant(device.status)}>
+                            {statusLabels[device.status ?? ""] ||
+                              device.status ||
+                              "غير محدد"}
+                          </Badge>
+                        </TableCell>
 
-                      <TableCell>
-                        <Badge variant={getStatusVariant(device.status)}>
-                          {statusLabels[device.status ?? ""] ||
-                            device.status ||
-                            "غير محدد"}
-                        </Badge>
-                      </TableCell>
+                        <TableCell className="align-top">
+                          <p className="truncate">
+                            {formatDate(device.lastSeenAt)}
+                          </p>
+                        </TableCell>
 
-                      <TableCell>{formatDate(device.lastSeenAt)}</TableCell>
-                      <TableCell>{formatDate(device.createdAt)}</TableCell>
+                        <TableCell className="align-top">
+                          <p className="truncate">
+                            {formatDate(device.createdAt)}
+                          </p>
+                        </TableCell>
 
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditModal(device)}
-                          >
-                            <Edit className="h-4 w-4" />
-                            تعديل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => requestAction(device, "rotate")}
-                          >
-                            <RotateCcwKey className="h-4 w-4" />
-                            API Key
-                          </Button>
-
-                          {device.status === "ACTIVE" ? (
+                        <TableCell className="align-top">
+                          <div className="flex flex-nowrap items-center justify-center gap-1">
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => requestAction(device, "suspend")}
+                              title="تعديل"
+                              aria-label="تعديل"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() => openEditModal(device)}
+                              disabled={isActionSubmitting}
                             >
-                              <XCircle className="h-4 w-4" />
-                              إيقاف
+                              <Edit className="h-4 w-4" />
                             </Button>
-                          ) : (
+
                             <Button
                               size="sm"
-                              variant="secondary"
-                              onClick={() => requestAction(device, "activate")}
+                              variant="outline"
+                              title="تدوير API Key"
+                              aria-label="تدوير API Key"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() => requestAction(device, "rotate")}
+                              disabled={isActionSubmitting}
                             >
-                              <CheckCircle2 className="h-4 w-4" />
-                              تفعيل
+                              <RotateCcwKey className="h-4 w-4" />
                             </Button>
-                          )}
 
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => requestAction(device, "revoke")}
-                          >
-                            <ShieldAlert className="h-4 w-4" />
-                            Revoke
-                          </Button>
+                            {device.status === "ACTIVE" ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                title="إيقاف"
+                                aria-label="إيقاف"
+                                className="h-8 w-8 shrink-0 p-0"
+                                onClick={() => requestAction(device, "suspend")}
+                                disabled={isActionSubmitting}
+                              >
+                                <XCircle className="h-4 w-4" />
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                title="تفعيل"
+                                aria-label="تفعيل"
+                                className="h-8 w-8 shrink-0 p-0"
+                                onClick={() =>
+                                  requestAction(device, "activate")
+                                }
+                                disabled={
+                                  isActionSubmitting ||
+                                  device.status === "REVOKED"
+                                }
+                              >
+                                <CheckCircle2 className="h-4 w-4" />
+                              </Button>
+                            )}
 
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() => requestAction(device, "delete")}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            حذف
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="إلغاء"
+                              aria-label="إلغاء"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() => requestAction(device, "revoke")}
+                              disabled={
+                                isActionSubmitting ||
+                                device.status === "REVOKED"
+                              }
+                            >
+                              <ShieldAlert className="h-4 w-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              title="حذف"
+                              aria-label="حذف"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() => requestAction(device, "delete")}
+                              disabled={isActionSubmitting}
+                            >
+                              {deleteDeviceMutation.isPending &&
+                              selectedDevice?.id === device.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {devices.length} من أصل{" "}
+                  {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || devicesQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -703,8 +818,10 @@ export default function DevicesPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || devicesQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -772,6 +889,7 @@ export default function DevicesPage() {
             <Input
               label="اسم الجهاز"
               error={form.formState.errors.name?.message}
+              disabled={isDeviceSubmitting}
               {...form.register("name")}
             />
 
@@ -780,12 +898,35 @@ export default function DevicesPage() {
               dir="ltr"
               placeholder="K6_DEVICE_01"
               error={form.formState.errors.code?.message}
+              disabled={isDeviceSubmitting}
               {...form.register("code")}
             />
           </div>
 
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-[#4B4B4B]">
+              Metadata JSON
+            </label>
+
+            <textarea
+              {...form.register("metadataJson")}
+              rows={5}
+              dir="ltr"
+              disabled={isDeviceSubmitting}
+              placeholder={`{\n  "platform": "web",\n  "appVersion": "1.0.0"\n}`}
+              className="custom-scrollbar w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-left font-mono text-sm text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
+            />
+
+            {form.formState.errors.metadataJson ? (
+              <p className="text-sm font-bold text-red-600">
+                {form.formState.errors.metadataJson.message}
+              </p>
+            ) : null}
+          </div>
+
           <div className="rounded-2xl border border-[#A88042]/20 bg-[#A88042]/5 p-4">
             <p className="text-sm font-extrabold text-[#4B4B4B]">ملاحظة مهمة</p>
+
             <p className="mt-1 text-xs font-bold leading-6 text-[#4B4B4B]/55">
               عند إنشاء الجهاز سيظهر Device API Key مرة واحدة. انسخه واحفظه لأنه
               سيستخدم لاحقًا في تطبيق السكانر.
@@ -818,6 +959,7 @@ export default function DevicesPage() {
             <p className="text-sm font-extrabold text-amber-800">
               احفظ المفتاح الآن
             </p>
+
             <p className="mt-1 text-xs font-bold leading-6 text-amber-800/70">
               هذا المفتاح يعطي صلاحية للجهاز لاستخدام مسارات Device API مثل
               /device/me و /device/scans لاحقًا.
@@ -826,6 +968,7 @@ export default function DevicesPage() {
 
           <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
             <p className="mb-2 text-xs font-bold text-[#4B4B4B]/50">الجهاز</p>
+
             <p className="font-extrabold text-[#4B4B4B]">
               {secretResponse?.device.name || "—"}
             </p>
@@ -834,6 +977,7 @@ export default function DevicesPage() {
           <div className="rounded-2xl border border-black/10 bg-black p-4 text-white">
             <div className="mb-2 flex items-center gap-2 text-[#D6B06E]">
               <KeyRound className="h-4 w-4" />
+
               <p className="text-sm font-extrabold">Raw API Key</p>
             </div>
 
