@@ -8,6 +8,12 @@ export type RegistrationFieldType =
   | "SELECT"
   | "CHECKBOX";
 
+export type RegistrationFieldOption = {
+  labelAr: string;
+  labelEn: string;
+  value: string;
+};
+
 export type RegistrationField = {
   id: string;
   eventId: string;
@@ -18,7 +24,7 @@ export type RegistrationField = {
   type: RegistrationFieldType;
   placeholderAr?: string | null;
   placeholderEn?: string | null;
-  options?: string[] | null;
+  options?: RegistrationFieldOption[] | string[] | null;
   isRequired: boolean;
   isActive: boolean;
   sortOrder: number;
@@ -53,7 +59,7 @@ export type CreateRegistrationFieldPayload = {
   type: RegistrationFieldType;
   placeholderAr?: string;
   placeholderEn?: string;
-  options: string[];
+  options: RegistrationFieldOption[];
   isRequired: boolean;
   isActive: boolean;
   sortOrder: number;

@@ -8,6 +8,12 @@ import {
   UpdateRegistrationFieldPayload,
 } from "./registration-fields.types";
 
+type DeleteRegistrationFieldResponse = {
+  id?: string;
+  message?: string;
+  registrationField?: RegistrationField;
+};
+
 function normalizeRegistrationFieldsList(
   data: unknown,
 ): RegistrationFieldsListResponse {
@@ -16,21 +22,28 @@ function normalizeRegistrationFieldsList(
   >(data);
 
   if (Array.isArray(value)) {
+    const activeItems = value.filter((field) => field.isActive !== false);
+
     return {
-      items: value,
-      total: value.length,
+      items: activeItems,
+      total: activeItems.length,
       page: 1,
-      limit: value.length,
+      limit: activeItems.length,
       totalPages: 1,
     };
   }
 
+  const items = (value.items ?? []).filter((field) => field.isActive !== false);
+
+  const limit = value.limit ?? 20;
+  const total = value.total ?? items.length;
+
   return {
-    items: value.items ?? [],
-    total: value.total,
-    page: value.page,
-    limit: value.limit,
-    totalPages: value.totalPages,
+    items,
+    total,
+    page: value.page ?? 1,
+    limit,
+    totalPages: value.totalPages ?? Math.max(Math.ceil(total / limit), 1),
   };
 }
 
@@ -46,6 +59,7 @@ export async function getRegistrationFields(
 
 export async function getRegistrationField(id: string) {
   const response = await adminClient.get(`/registration-fields/${id}`);
+
   return unwrapApiData<RegistrationField>(response.data);
 }
 
@@ -53,6 +67,7 @@ export async function createRegistrationField(
   payload: CreateRegistrationFieldPayload,
 ) {
   const response = await adminClient.post("/registration-fields", payload);
+
   return unwrapApiData<RegistrationField>(response.data);
 }
 
@@ -64,10 +79,35 @@ export async function updateRegistrationField(
     `/registration-fields/${id}`,
     payload,
   );
+
   return unwrapApiData<RegistrationField>(response.data);
 }
 
 export async function deleteRegistrationField(id: string) {
   const response = await adminClient.delete(`/registration-fields/${id}`);
-  return unwrapApiData<RegistrationField>(response.data);
+
+  const data = unwrapApiData<
+    DeleteRegistrationFieldResponse | RegistrationField
+  >(response.data);
+
+  if (
+    data &&
+    typeof data === "object" &&
+    "registrationField" in data &&
+    data.registrationField?.id
+  ) {
+    return {
+      id: data.registrationField.id,
+      registrationField: data.registrationField,
+    };
+  }
+
+  if (data && typeof data === "object" && "id" in data && data.id) {
+    return {
+      id: data.id,
+      registrationField: data as RegistrationField,
+    };
+  }
+
+  return { id };
 }

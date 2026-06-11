@@ -7,9 +7,10 @@ import {
   ListChecks,
   Loader2,
   Plus,
+  RefreshCcw,
   Trash2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmitHandler, useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,10 +48,13 @@ import {
 } from "@/features/registration-fields/registration-fields.queries";
 import {
   RegistrationField,
+  RegistrationFieldOption,
   RegistrationFieldType,
 } from "@/features/registration-fields/registration-fields.types";
 
 type PendingAction = "create" | "update" | "delete" | null;
+
+const PAGE_LIMIT = 20;
 
 const fieldTypeLabels: Record<RegistrationFieldType, string> = {
   TEXT: "نص قصير",
@@ -63,6 +67,39 @@ const fieldTypeLabels: Record<RegistrationFieldType, string> = {
   CHECKBOX: "مربع اختيار",
 };
 
+function optionsToInput(options?: RegistrationField["options"]) {
+  if (!options?.length) return "";
+
+  return options
+    .map((option) => {
+      if (typeof option === "string") return option;
+
+      return option.labelAr || option.labelEn || option.value;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function normalizePayload(values: RegistrationFieldFormValues) {
+  return {
+    eventId: values.eventId,
+    attendeeTypeId: values.attendeeTypeId,
+    key: values.key.trim(),
+    labelAr: values.labelAr.trim(),
+    labelEn: values.labelEn.trim(),
+    type: values.type,
+    placeholderAr: values.placeholderAr?.trim() || undefined,
+    placeholderEn: values.placeholderEn?.trim() || undefined,
+    options:
+      values.type === "SELECT"
+        ? (values.options as RegistrationFieldOption[])
+        : [],
+    isRequired: values.isRequired,
+    isActive: values.isActive,
+    sortOrder: Number(values.sortOrder),
+  };
+}
+
 export default function RegistrationFieldsPage() {
   const [page, setPage] = useState(1);
   const [eventFilter, setEventFilter] = useState("");
@@ -71,16 +108,18 @@ export default function RegistrationFieldsPage() {
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+
   const [selectedField, setSelectedField] = useState<RegistrationField | null>(
     null,
   );
+
   const [pendingValues, setPendingValues] =
     useState<RegistrationFieldFormValues | null>(null);
 
   const fieldsParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
       attendeeTypeId: attendeeTypeFilter || undefined,
     }),
@@ -144,8 +183,21 @@ export default function RegistrationFieldsPage() {
     updateFieldMutation.isPending ||
     deleteFieldMutation.isPending;
 
+  const isFiltering = Boolean(eventFilter || attendeeTypeFilter);
+
+  useEffect(() => {
+    if (!fieldsQuery.isSuccess) return;
+
+    if (fields.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [fields.length, fieldsQuery.isSuccess, page]);
+
   function openCreateModal() {
     setSelectedField(null);
+    setPendingValues(null);
+    setPendingAction(null);
+
     form.reset({
       eventId: eventFilter || "",
       attendeeTypeId: attendeeTypeFilter || "",
@@ -160,11 +212,15 @@ export default function RegistrationFieldsPage() {
       isActive: true,
       sortOrder: 1,
     });
+
     setFormModalOpen(true);
   }
 
   function openEditModal(field: RegistrationField) {
     setSelectedField(field);
+    setPendingValues(null);
+    setPendingAction(null);
+
     form.reset({
       eventId: field.eventId,
       attendeeTypeId: field.attendeeTypeId,
@@ -174,27 +230,37 @@ export default function RegistrationFieldsPage() {
       type: field.type,
       placeholderAr: field.placeholderAr ?? "",
       placeholderEn: field.placeholderEn ?? "",
-      options: field.options?.join(", ") ?? "",
+      options: optionsToInput(field.options),
       isRequired: field.isRequired,
       isActive: field.isActive,
       sortOrder: field.sortOrder ?? 1,
     });
+
     setFormModalOpen(true);
   }
 
   function closeFormModal() {
     if (isSubmitting) return;
+
     setFormModalOpen(false);
     setSelectedField(null);
     setPendingValues(null);
+    setPendingAction(null);
     form.reset();
   }
 
   function closeConfirm() {
     if (isSubmitting) return;
+
     setConfirmOpen(false);
     setPendingAction(null);
     setPendingValues(null);
+  }
+
+  function clearFilters() {
+    setPage(1);
+    setEventFilter("");
+    setAttendeeTypeFilter("");
   }
 
   const requestSubmit: SubmitHandler<RegistrationFieldFormValues> = (
@@ -207,25 +273,9 @@ export default function RegistrationFieldsPage() {
 
   function requestDelete(field: RegistrationField) {
     setSelectedField(field);
+    setPendingValues(null);
     setPendingAction("delete");
     setConfirmOpen(true);
-  }
-
-  function normalizePayload(values: RegistrationFieldFormValues) {
-    return {
-      eventId: values.eventId,
-      attendeeTypeId: values.attendeeTypeId,
-      key: values.key.trim(),
-      labelAr: values.labelAr.trim(),
-      labelEn: values.labelEn.trim(),
-      type: values.type,
-      placeholderAr: values.placeholderAr?.trim() || undefined,
-      placeholderEn: values.placeholderEn?.trim() || undefined,
-      options: values.type === "SELECT" ? values.options : [],
-      isRequired: values.isRequired,
-      isActive: values.isActive,
-      sortOrder: Number(values.sortOrder),
-    };
   }
 
   function getEventTitle(eventId: string) {
@@ -301,10 +351,19 @@ export default function RegistrationFieldsPage() {
       ? "سيتم إضافة حقل جديد إلى نموذج التسجيل الخاص بنوع الحضور المحدد."
       : pendingAction === "update"
         ? `سيتم تعديل حقل التسجيل: ${selectedField?.labelAr ?? ""}.`
-        : `سيتم حذف حقل التسجيل: ${selectedField?.labelAr ?? ""}. تأكد من عدم اعتماد التسجيلات الحالية عليه قبل المتابعة.`;
+        : `سيتم تعطيل حقل التسجيل: ${
+            selectedField?.labelAr ?? ""
+          }. سيختفي من النماذج الجديدة مع بقاء قيم التسجيلات القديمة قابلة للقراءة.`;
+
+  const confirmText =
+    pendingAction === "create"
+      ? "تأكيد الإضافة"
+      : pendingAction === "update"
+        ? "تأكيد التعديل"
+        : "تأكيد الحذف";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Registration Fields"
         title="حقول التسجيل"
@@ -318,79 +377,118 @@ export default function RegistrationFieldsPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-3">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">إجمالي الحقول</p>
+
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {fieldsQuery.isLoading ? "..." : total}
+            </h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <FileInput className="h-6 w-6" />
             </div>
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">نتائج الصفحة</p>
+
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {fields.length}
+            {fieldsQuery.isLoading ? "..." : fields.length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
-          <div className="mt-3">
+
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge variant={fieldsQuery.isFetching ? "warning" : "success"}>
               {fieldsQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => fieldsQuery.refetch()}
+              disabled={fieldsQuery.isFetching}
+            >
+              <RefreshCcw
+                className={`h-4 w-4 ${
+                  fieldsQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
           <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <CardTitle>قائمة حقول التسجيل</CardTitle>
+
               <CardDescription>
                 فلتر حسب الفعالية ونوع الحضور، ثم أضف الحقول المطلوبة.
               </CardDescription>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[240px_240px_auto]">
-              <Select
-                value={eventFilter}
-                placeholder="كل الفعاليات"
-                onChange={(value) => {
-                  setPage(1);
-                  setEventFilter(value);
-                  setAttendeeTypeFilter("");
-                }}
-                options={[
-                  { label: "كل الفعاليات", value: "" },
-                  ...events.map((event) => ({
-                    label: event.titleAr,
-                    value: event.id,
-                  })),
-                ]}
-              />
+            <div className="flex w-full items-center gap-3 overflow-x-auto pb-1 xl:w-auto">
+              <div className="min-w-[240px]">
+                <Select
+                  value={eventFilter}
+                  placeholder="كل الفعاليات"
+                  onChange={(value) => {
+                    setPage(1);
+                    setEventFilter(value);
+                    setAttendeeTypeFilter("");
+                  }}
+                  options={[
+                    { label: "كل الفعاليات", value: "" },
+                    ...events.map((event) => ({
+                      label: event.titleAr,
+                      value: event.id,
+                    })),
+                  ]}
+                />
+              </div>
 
-              <Select
-                value={attendeeTypeFilter}
-                placeholder="كل أنواع الحضور"
-                disabled={!eventFilter}
-                onChange={(value) => {
-                  setPage(1);
-                  setAttendeeTypeFilter(value);
-                }}
-                options={[
-                  { label: "كل أنواع الحضور", value: "" },
-                  ...attendeeTypes.map((type) => ({
-                    label: type.nameAr,
-                    value: type.id,
-                  })),
-                ]}
-              />
+              <div className="min-w-[240px]">
+                <Select
+                  value={attendeeTypeFilter}
+                  placeholder="كل أنواع الحضور"
+                  disabled={!eventFilter}
+                  onChange={(value) => {
+                    setPage(1);
+                    setAttendeeTypeFilter(value);
+                  }}
+                  options={[
+                    { label: "كل أنواع الحضور", value: "" },
+                    ...attendeeTypes.map((type) => ({
+                      label: type.nameAr,
+                      value: type.id,
+                    })),
+                  ]}
+                />
+              </div>
 
-              <Button variant="outline" onClick={openCreateModal}>
+              {isFiltering ? (
+                <Button
+                  className="shrink-0"
+                  variant="outline"
+                  onClick={clearFilters}
+                >
+                  مسح
+                </Button>
+              ) : null}
+
+              <Button
+                className="shrink-0"
+                variant="outline"
+                onClick={openCreateModal}
+              >
                 <Plus className="h-4 w-4" />
                 حقل جديد
               </Button>
@@ -401,6 +499,7 @@ export default function RegistrationFieldsPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل الحقول...
                 </p>
@@ -412,6 +511,11 @@ export default function RegistrationFieldsPage() {
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل حقول التسجيل
                 </p>
+
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
+                </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -427,109 +531,146 @@ export default function RegistrationFieldsPage() {
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
                   <ListChecks className="h-7 w-7" />
                 </div>
+
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد حقول تسجيل بعد
+                  {isFiltering
+                    ? "لا توجد حقول مطابقة"
+                    : "لا توجد حقول تسجيل بعد"}
                 </p>
+
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف أول حقل حتى تبدأ ببناء نموذج التسجيل العام للزوار.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها لعرض كل الحقول."
+                    : "أضف أول حقل حتى تبدأ ببناء نموذج التسجيل العام للزوار."}
                 </p>
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  إضافة حقل
-                </Button>
+
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    إضافة حقل
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>الحقل</TableHead>
-                    <TableHead>المفتاح</TableHead>
-                    <TableHead>النوع</TableHead>
-                    <TableHead>نوع الحضور</TableHead>
-                    <TableHead>مطلوب</TableHead>
-                    <TableHead>الحالة</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {fields.map((field) => (
-                    <TableRow key={field.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">{field.labelAr}</p>
-                          <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                            {field.labelEn}
-                          </p>
-                          <p className="mt-1 text-xs font-bold text-[#A88042]">
-                            {getEventTitle(field.eventId)}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="black">{field.key}</Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="gold">
-                          {fieldTypeLabels[field.type] ?? field.type}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        {getAttendeeTypeTitle(field.attendeeTypeId)}
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant={field.isRequired ? "warning" : "muted"}>
-                          {field.isRequired ? "مطلوب" : "اختياري"}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant={field.isActive ? "success" : "danger"}>
-                          {field.isActive ? "فعّال" : "معطّل"}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditModal(field)}
-                          >
-                            <Edit className="h-4 w-4" />
-                            تعديل
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() => requestDelete(field)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            حذف
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead>الحقل</TableHead>
+                      <TableHead>المفتاح</TableHead>
+                      <TableHead>النوع</TableHead>
+                      <TableHead>نوع الحضور</TableHead>
+                      <TableHead>مطلوب</TableHead>
+                      <TableHead>الحالة</TableHead>
+                      <TableHead>الإجراءات</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {fields.map((field) => (
+                      <TableRow key={field.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-extrabold text-[#4B4B4B]">
+                              {field.labelAr}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
+                              {field.labelEn}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#A88042]">
+                              {getEventTitle(field.eventId)}
+                            </p>
+
+                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/35">
+                              ID: {field.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge variant="black">{field.key}</Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge variant="gold">
+                            {fieldTypeLabels[field.type] ?? field.type}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          {getAttendeeTypeTitle(field.attendeeTypeId)}
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge
+                            variant={field.isRequired ? "warning" : "muted"}
+                          >
+                            {field.isRequired ? "مطلوب" : "اختياري"}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge
+                            variant={field.isActive ? "success" : "danger"}
+                          >
+                            {field.isActive ? "فعّال" : "معطّل"}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openEditModal(field)}
+                              disabled={isSubmitting}
+                            >
+                              <Edit className="h-4 w-4" />
+                              تعديل
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => requestDelete(field)}
+                              disabled={isSubmitting}
+                            >
+                              {deleteFieldMutation.isPending &&
+                              selectedField?.id === field.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                              حذف
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {fields.length} من أصل{" "}
+                  {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || fieldsQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -537,8 +678,10 @@ export default function RegistrationFieldsPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || fieldsQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -568,10 +711,14 @@ export default function RegistrationFieldsPage() {
             >
               إلغاء
             </Button>
+
             <Button
               onClick={form.handleSubmit(requestSubmit)}
               disabled={isSubmitting}
             >
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
               {selectedField ? "متابعة التعديل" : "متابعة الإضافة"}
             </Button>
           </>
@@ -592,6 +739,7 @@ export default function RegistrationFieldsPage() {
                 shouldDirty: true,
                 shouldValidate: true,
               });
+
               form.setValue("attendeeTypeId", "", {
                 shouldDirty: true,
                 shouldValidate: true,
@@ -626,6 +774,7 @@ export default function RegistrationFieldsPage() {
             label="مفتاح الحقل"
             placeholder="fullName"
             error={form.formState.errors.key?.message}
+            disabled={isSubmitting}
             {...form.register("key")}
           />
 
@@ -655,6 +804,7 @@ export default function RegistrationFieldsPage() {
             label="اسم الحقل بالعربي"
             placeholder="الاسم الكامل"
             error={form.formState.errors.labelAr?.message}
+            disabled={isSubmitting}
             {...form.register("labelAr")}
           />
 
@@ -662,6 +812,7 @@ export default function RegistrationFieldsPage() {
             label="اسم الحقل بالإنجليزي"
             placeholder="Full Name"
             error={form.formState.errors.labelEn?.message}
+            disabled={isSubmitting}
             {...form.register("labelEn")}
           />
 
@@ -669,6 +820,7 @@ export default function RegistrationFieldsPage() {
             label="Placeholder عربي"
             placeholder="اكتب الاسم الكامل"
             error={form.formState.errors.placeholderAr?.message}
+            disabled={isSubmitting}
             {...form.register("placeholderAr")}
           />
 
@@ -676,14 +828,16 @@ export default function RegistrationFieldsPage() {
             label="Placeholder إنجليزي"
             placeholder="Enter full name"
             error={form.formState.errors.placeholderEn?.message}
+            disabled={isSubmitting}
             {...form.register("placeholderEn")}
           />
 
           {selectedFormType === "SELECT" ? (
             <Input
               label="خيارات القائمة"
-              placeholder="Option 1, Option 2, Option 3"
+              placeholder="نباتي, عادي, VIP"
               error={form.formState.errors.options?.message}
+              disabled={isSubmitting}
               {...form.register("options")}
             />
           ) : null}
@@ -693,6 +847,7 @@ export default function RegistrationFieldsPage() {
             type="number"
             min={0}
             error={form.formState.errors.sortOrder?.message}
+            disabled={isSubmitting}
             {...form.register("sortOrder", {
               valueAsNumber: true,
             })}
@@ -702,8 +857,10 @@ export default function RegistrationFieldsPage() {
             <input
               type="checkbox"
               className="h-5 w-5 accent-[#A88042]"
+              disabled={isSubmitting}
               {...form.register("isRequired")}
             />
+
             <span className="text-sm font-extrabold text-[#4B4B4B]">
               الحقل مطلوب
             </span>
@@ -713,8 +870,10 @@ export default function RegistrationFieldsPage() {
             <input
               type="checkbox"
               className="h-5 w-5 accent-[#A88042]"
+              disabled={isSubmitting}
               {...form.register("isActive")}
             />
+
             <span className="text-sm font-extrabold text-[#4B4B4B]">
               الحقل فعّال
             </span>
@@ -726,13 +885,7 @@ export default function RegistrationFieldsPage() {
         open={confirmOpen}
         title={confirmTitle}
         description={confirmDescription}
-        confirmText={
-          pendingAction === "create"
-            ? "تأكيد الإضافة"
-            : pendingAction === "update"
-              ? "تأكيد التعديل"
-              : "تأكيد الحذف"
-        }
+        confirmText={confirmText}
         variant={pendingAction === "delete" ? "danger" : "gold"}
         isLoading={isSubmitting}
         onClose={closeConfirm}
