@@ -5,6 +5,7 @@ export type Client = {
   contactPhone?: string | null;
   contactEmail?: string | null;
   notes?: string | null;
+  isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
 };

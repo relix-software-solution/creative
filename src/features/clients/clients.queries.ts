@@ -8,6 +8,7 @@ import {
 } from "./clients.api";
 import {
   ClientsListParams,
+  ClientsListResponse,
   CreateClientPayload,
   UpdateClientPayload,
 } from "./clients.types";
@@ -42,6 +43,10 @@ function getErrorMessage(error: unknown) {
     }
   }
 
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
   return "حدث خطأ غير متوقع";
 }
 
@@ -49,6 +54,7 @@ export function useClients(params: ClientsListParams) {
   return useQuery({
     queryKey: clientsKeys.list(params),
     queryFn: () => getClients(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -60,6 +66,7 @@ export function useCreateClient() {
 
     onSuccess: () => {
       toast.success("تم إضافة العميل بنجاح");
+
       queryClient.invalidateQueries({
         queryKey: clientsKeys.lists(),
       });
@@ -85,6 +92,7 @@ export function useUpdateClient() {
 
     onSuccess: () => {
       toast.success("تم تعديل العميل بنجاح");
+
       queryClient.invalidateQueries({
         queryKey: clientsKeys.lists(),
       });
@@ -102,8 +110,30 @@ export function useDeleteClient() {
   return useMutation({
     mutationFn: (id: string) => deleteClient(id),
 
-    onSuccess: () => {
+    onSuccess: ({ id }) => {
       toast.success("تم حذف العميل بنجاح");
+
+      queryClient.setQueriesData<ClientsListResponse>(
+        {
+          queryKey: clientsKeys.lists(),
+        },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          const nextItems = oldData.items.filter((client) => client.id !== id);
+          const currentTotal = oldData.total ?? oldData.items.length;
+          const nextTotal = Math.max(currentTotal - 1, 0);
+          const limit = oldData.limit || 20;
+
+          return {
+            ...oldData,
+            items: nextItems,
+            total: nextTotal,
+            totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+          };
+        },
+      );
+
       queryClient.invalidateQueries({
         queryKey: clientsKeys.lists(),
       });

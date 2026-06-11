@@ -8,25 +8,40 @@ import {
   UpdateClientPayload,
 } from "./clients.types";
 
+type DeleteClientResponse = {
+  id?: string;
+  message?: string;
+  client?: Client;
+};
+
 function normalizeClientsList(data: unknown): ClientsListResponse {
   const value = unwrapApiData<ClientsListResponse | Client[]>(data);
 
   if (Array.isArray(value)) {
+    const activeItems = value.filter((client) => client.isActive !== false);
+
     return {
-      items: value,
-      total: value.length,
+      items: activeItems,
+      total: activeItems.length,
       page: 1,
-      limit: value.length,
+      limit: activeItems.length,
       totalPages: 1,
     };
   }
 
+  const items = (value.items ?? []).filter(
+    (client) => client.isActive !== false,
+  );
+
+  const limit = value.limit ?? 20;
+  const total = value.total ?? items.length;
+
   return {
-    items: value.items ?? [],
-    total: value.total,
-    page: value.page,
-    limit: value.limit,
-    totalPages: value.totalPages,
+    items,
+    total,
+    page: value.page ?? 1,
+    limit,
+    totalPages: value.totalPages ?? Math.max(Math.ceil(total / limit), 1),
   };
 }
 
@@ -40,20 +55,42 @@ export async function getClients(params: ClientsListParams) {
 
 export async function getClient(id: string) {
   const response = await adminClient.get(`/clients/${id}`);
-  return unwrapApiData<Client>(response.data);
+
+  const client = unwrapApiData<Client>(response.data);
+
+  return client;
 }
 
 export async function createClient(payload: CreateClientPayload) {
   const response = await adminClient.post("/clients", payload);
+
   return unwrapApiData<Client>(response.data);
 }
 
 export async function updateClient(id: string, payload: UpdateClientPayload) {
   const response = await adminClient.patch(`/clients/${id}`, payload);
+
   return unwrapApiData<Client>(response.data);
 }
 
 export async function deleteClient(id: string) {
   const response = await adminClient.delete(`/clients/${id}`);
-  return unwrapApiData<Client>(response.data);
+
+  const data = unwrapApiData<DeleteClientResponse | Client>(response.data);
+
+  if (data && typeof data === "object" && "client" in data && data.client?.id) {
+    return {
+      id: data.client.id,
+      client: data.client,
+    };
+  }
+
+  if (data && typeof data === "object" && "id" in data && data.id) {
+    return {
+      id: data.id,
+      client: data as Client,
+    };
+  }
+
+  return { id };
 }
