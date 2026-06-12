@@ -31,9 +31,18 @@ export type QrRecord = {
   qrToken?: string;
   token?: string;
   status?: QrStatus;
+
   publicUrl?: string;
   imageUrl?: string;
   qrImageUrl?: string;
+  url?: string;
+  path?: string;
+  fileUrl?: string;
+  qrUrl?: string;
+  image?: string;
+
+  objectUrl?: string;
+
   validFrom?: string | null;
   validUntil?: string | null;
   revokedAt?: string | null;
@@ -44,9 +53,8 @@ export type QrRecord = {
 
 export type QrResponse = QrRecord & {
   qr?: QrRecord;
-  qrToken?: string;
-  publicUrl?: string;
-  imageUrl?: string;
+  data?: QrRecord;
+  message?: string;
 };
 
 export type ValidateQrPayload = {

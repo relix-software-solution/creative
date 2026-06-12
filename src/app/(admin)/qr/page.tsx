@@ -15,7 +15,7 @@ import {
   ShieldX,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,53 +55,149 @@ import {
 
 type PendingAction = "generate" | "image" | "revoke" | null;
 
+const PAGE_LIMIT = 20;
+
+const qrStatusLabels: Record<string, string> = {
+  ACTIVE: "فعّال",
+  REVOKED: "ملغى",
+  EXPIRED: "منتهي",
+  USED: "مستخدم",
+  INACTIVE: "غير فعّال",
+};
+
+const registrationStatusLabels: Record<string, string> = {
+  PENDING: "بانتظار التفعيل",
+  ACTIVE: "فعّال",
+  CANCELLED: "ملغي",
+  BLOCKED: "محظور",
+};
+
+type LooseQrResponse = QrResponse & {
+  url?: string;
+  path?: string;
+  fileUrl?: string;
+  qrUrl?: string;
+  image?: string;
+  data?: QrResponse & {
+    url?: string;
+    path?: string;
+    fileUrl?: string;
+    qrUrl?: string;
+    image?: string;
+  };
+};
+
 function formatDate(value?: string | null) {
   if (!value) return "—";
 
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+
   return new Intl.DateTimeFormat("ar-SY", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
+    month: "2-digit",
+    day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
+}
+
+function getApiOrigin() {
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+
+  return apiBase.replace(/\/api\/v1\/?$/, "").replace(/\/$/, "");
+}
+
+function normalizeUrl(url?: string | null) {
+  if (!url) return "";
+
+  const cleanUrl = url.trim();
+  if (!cleanUrl) return "";
+
+  if (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://")) {
+    return cleanUrl;
+  }
+
+  const origin = getApiOrigin();
+
+  if (!origin) {
+    return cleanUrl.startsWith("/") ? cleanUrl : `/${cleanUrl}`;
+  }
+
+  return `${origin}${cleanUrl.startsWith("/") ? cleanUrl : `/${cleanUrl}`}`;
 }
 
 function getQrToken(data?: QrResponse | null) {
+  const status = data?.status || data?.qr?.status;
+
+  if (status === "REVOKED") return "";
+
   return (
     data?.qrToken || data?.token || data?.qr?.qrToken || data?.qr?.token || ""
   );
 }
 
 function getQrStatus(data?: QrResponse | null) {
-  return data?.status || data?.qr?.status || "—";
+  return data?.status || data?.qr?.status || "";
+}
+
+function getQrValidFrom(data?: QrResponse | null) {
+  return data?.validFrom || data?.qr?.validFrom || null;
+}
+
+function getQrValidUntil(data?: QrResponse | null) {
+  return data?.validUntil || data?.qr?.validUntil || null;
 }
 
 function getQrImageUrl(data?: QrResponse | null) {
+  if (data?.status === "REVOKED" || data?.qr?.status === "REVOKED") {
+    return "";
+  }
+
   const url =
+    data?.objectUrl ||
     data?.publicUrl ||
     data?.imageUrl ||
     data?.qrImageUrl ||
+    data?.url ||
+    data?.path ||
+    data?.fileUrl ||
+    data?.qrUrl ||
+    data?.image ||
+    data?.qr?.objectUrl ||
     data?.qr?.publicUrl ||
     data?.qr?.imageUrl ||
     data?.qr?.qrImageUrl ||
+    data?.data?.objectUrl ||
+    data?.data?.publicUrl ||
+    data?.data?.imageUrl ||
+    data?.data?.qrImageUrl ||
+    data?.data?.url ||
+    data?.data?.path ||
+    data?.data?.fileUrl ||
+    data?.data?.qrUrl ||
+    data?.data?.image ||
     "";
 
-  if (!url) return "";
-
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
-
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "";
-  const origin = apiBase.replace(/\/api\/v1\/?$/, "");
-
-  return `${origin}${url.startsWith("/") ? url : `/${url}`}`;
+  return normalizeUrl(url);
 }
 
-function getStatusVariant(status?: string | null) {
+function getStatusVariant(
+  status?: string | null,
+): "success" | "warning" | "danger" | "muted" | "gold" {
   if (status === "ACTIVE") return "success";
   if (status === "REVOKED") return "danger";
   if (status === "EXPIRED") return "warning";
   if (status === "USED") return "muted";
+  return "gold";
+}
+
+function getRegistrationStatusVariant(
+  status?: string | null,
+): "success" | "warning" | "danger" | "muted" | "gold" {
+  if (status === "ACTIVE") return "success";
+  if (status === "PENDING") return "warning";
+  if (status === "BLOCKED") return "danger";
+  if (status === "CANCELLED") return "muted";
   return "gold";
 }
 
@@ -128,6 +224,10 @@ function getRegistrationName(registration?: QrRegistration | null) {
   );
 }
 
+function getRegistrationContact(registration: QrRegistration) {
+  return registration.phone || registration.email || "—";
+}
+
 export default function QrAdminPage() {
   const [page, setPage] = useState(1);
   const [eventFilter, setEventFilter] = useState("");
@@ -141,6 +241,8 @@ export default function QrAdminPage() {
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
   const [latestQrResult, setLatestQrResult] = useState<QrResponse | null>(null);
+  const [imageBroken, setImageBroken] = useState(false);
+
   const [validateToken, setValidateToken] = useState("");
   const [validateResult, setValidateResult] =
     useState<ValidateQrResponse | null>(null);
@@ -150,7 +252,7 @@ export default function QrAdminPage() {
   const registrationsParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
       search: search || undefined,
     }),
@@ -177,15 +279,36 @@ export default function QrAdminPage() {
   const currentQrToken = getQrToken(currentQr);
   const currentQrStatus = getQrStatus(currentQr);
   const currentQrImageUrl = getQrImageUrl(currentQr);
+  const currentQrValidFrom = getQrValidFrom(currentQr);
+  const currentQrValidUntil = getQrValidUntil(currentQr);
+
+  const hasQr = Boolean(currentQrToken);
+  const hasQrImage = Boolean(currentQrImageUrl) && !imageBroken;
+  const isQrLoading = qrQuery.isLoading && !latestQrResult;
 
   const isActionLoading =
     generateQrMutation.isPending ||
     createImageMutation.isPending ||
     revokeQrMutation.isPending;
 
+  const isFiltering = Boolean(search || eventFilter);
+
+  useEffect(() => {
+    setImageBroken(false);
+  }, [currentQrImageUrl]);
+
+  useEffect(() => {
+    if (!registrationsQuery.isSuccess) return;
+
+    if (registrations.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [registrations.length, registrationsQuery.isSuccess, page]);
+
   function openDetails(registration: QrRegistration) {
     setSelectedRegistration(registration);
     setLatestQrResult(null);
+    setImageBroken(false);
     setDetailsOpen(true);
   }
 
@@ -195,10 +318,14 @@ export default function QrAdminPage() {
     setDetailsOpen(false);
     setSelectedRegistration(null);
     setLatestQrResult(null);
+    setImageBroken(false);
   }
 
   function requestAction(action: PendingAction, registration?: QrRegistration) {
-    if (registration) setSelectedRegistration(registration);
+    if (registration) {
+      setSelectedRegistration(registration);
+      setDetailsOpen(true);
+    }
 
     setPendingAction(action);
     setConfirmOpen(true);
@@ -218,6 +345,7 @@ export default function QrAdminPage() {
       generateQrMutation.mutate(selectedRegistration.id, {
         onSuccess: (data) => {
           setLatestQrResult(data);
+          setImageBroken(false);
           setDetailsOpen(true);
           closeConfirm();
         },
@@ -230,6 +358,7 @@ export default function QrAdminPage() {
       createImageMutation.mutate(selectedRegistration.id, {
         onSuccess: (data) => {
           setLatestQrResult(data);
+          setImageBroken(false);
           setDetailsOpen(true);
           closeConfirm();
         },
@@ -242,6 +371,7 @@ export default function QrAdminPage() {
       revokeQrMutation.mutate(selectedRegistration.id, {
         onSuccess: (data) => {
           setLatestQrResult(data);
+          setImageBroken(false);
           setDetailsOpen(true);
           closeConfirm();
         },
@@ -261,7 +391,9 @@ export default function QrAdminPage() {
   }
 
   function submitValidate() {
-    if (!validateToken.trim()) {
+    const token = validateToken.trim();
+
+    if (!token) {
       toast.error("QR Token مطلوب");
       return;
     }
@@ -270,7 +402,7 @@ export default function QrAdminPage() {
 
     validateQrMutation.mutate(
       {
-        qrToken: validateToken.trim(),
+        qrToken: token,
       },
       {
         onSuccess: (data) => {
@@ -280,18 +412,28 @@ export default function QrAdminPage() {
     );
   }
 
+  function clearValidate() {
+    setValidateToken("");
+    setValidateResult(null);
+  }
+
   function clearFilters() {
     setPage(1);
     setSearch("");
     setEventFilter("");
   }
 
+  function getEventTitle() {
+    return events.find((event) => event.id === eventFilter)?.titleAr || "الكل";
+  }
+
   function getConfirmCopy() {
     if (pendingAction === "generate") {
       return {
         title: "توليد QR",
-        description:
-          "سيتم توليد QR جديد لهذا التسجيل. إذا كان يوجد QR سابق قد يتم استبداله حسب منطق الباك.",
+        description: selectedRegistration
+          ? `سيتم توليد QR للتسجيل: ${getRegistrationName(selectedRegistration)}.`
+          : "سيتم توليد QR لهذا التسجيل.",
         confirmText: "توليد",
         variant: "gold" as const,
       };
@@ -301,17 +443,16 @@ export default function QrAdminPage() {
       return {
         title: "إنشاء صورة QR",
         description:
-          "سيتم إنشاء/تحديث صورة QR لهذا التسجيل وإرجاع رابط الصورة إن توفر.",
-        confirmText: "إنشاء الصورة",
+          "سيتم إنشاء صورة QR قابلة للنسخ أو الإرسال للزائر اعتمادًا على QR الحالي.",
+        confirmText: "إنشاء",
         variant: "gold" as const,
       };
     }
 
     return {
       title: "إلغاء QR",
-      description:
-        "سيتم إلغاء QR الحالي لهذا التسجيل، ولن يعود صالحًا للاستخدام.",
-      confirmText: "إلغاء QR",
+      description: "سيتم إلغاء QR الحالي ولن يعود صالحًا للدخول أو التحقق.",
+      confirmText: "إلغاء",
       variant: "danger" as const,
     };
   }
@@ -319,83 +460,131 @@ export default function QrAdminPage() {
   const confirmCopy = getConfirmCopy();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="QR Management"
         title="إدارة QR"
-        description="توليد QR للتسجيلات، إنشاء صور QR، التحقق من Token، وإلغاء QR عند الحاجة."
+        description="توليد QR للتسجيلات، إنشاء صورة، التحقق من Token، أو إلغاء QR."
         actions={
           <Button
             variant="outline"
             onClick={() => registrationsQuery.refetch()}
+            disabled={registrationsQuery.isFetching}
           >
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw
+              className={`h-4 w-4 ${
+                registrationsQuery.isFetching ? "animate-spin" : ""
+              }`}
+            />
             تحديث
           </Button>
         }
       />
 
       <section className="grid gap-4 md:grid-cols-4">
-        <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">
-            التسجيلات المعروضة
-          </p>
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
+          <p className="text-sm font-bold text-[#4B4B4B]/60">التسجيلات</p>
+
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {registrationsQuery.isLoading ? "..." : total}
+            </h3>
+
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <QrCode className="h-6 w-6" />
             </div>
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">الفعالية</p>
+
           <h3 className="mt-3 truncate text-xl font-extrabold text-[#4B4B4B]">
-            {events.find((event) => event.id === eventFilter)?.titleAr ||
-              "كل الفعاليات"}
+            {getEventTitle()}
           </h3>
         </Card>
 
-        <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
-          <div className="mt-3">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
+          <p className="text-sm font-bold text-[#4B4B4B]/60">البيانات</p>
+
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge
               variant={registrationsQuery.isFetching ? "warning" : "success"}
             >
               {registrationsQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => registrationsQuery.refetch()}
+              disabled={registrationsQuery.isFetching}
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${
+                  registrationsQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
 
-        <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">Validate</p>
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
+          <p className="text-sm font-bold text-[#4B4B4B]/60">التحقق</p>
+
           <div className="mt-3">
-            <Badge variant={validateResult ? "gold" : "muted"}>
-              {validateResult ? "تم التحقق" : "جاهز"}
+            <Badge
+              variant={
+                validateResult
+                  ? isQrValid(validateResult)
+                    ? "success"
+                    : "danger"
+                  : "muted"
+              }
+            >
+              {validateResult
+                ? isQrValid(validateResult)
+                  ? "صالح"
+                  : "مرفوض"
+                : "جاهز"}
             </Badge>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
-          <div className="mb-6">
-            <CardTitle>التحقق من QR Token</CardTitle>
-            <CardDescription>
-              الصق QR Token للتحقق من صلاحيته قبل استخدامه في السكانر.
-            </CardDescription>
+          <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <CardTitle>فحص QR Token</CardTitle>
+
+              <CardDescription>
+                استخدمه للتأكد من صلاحية QR قبل تجربة الدخول.
+              </CardDescription>
+            </div>
+
+            {validateResult || validateToken ? (
+              <Button variant="outline" onClick={clearValidate}>
+                مسح
+              </Button>
+            ) : null}
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[1fr_auto]">
+          <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
             <Input
               value={validateToken}
               dir="ltr"
-              placeholder="Paste QR Token here..."
+              placeholder="Paste QR Token..."
               icon={<ShieldCheck className="h-4 w-4" />}
               onChange={(event) => setValidateToken(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") submitValidate();
+              }}
             />
 
             <Button
+              className="shrink-0 px-8"
               disabled={validateQrMutation.isPending}
               onClick={submitValidate}
             >
@@ -431,7 +620,7 @@ export default function QrAdminPage() {
                   )}
                 </div>
 
-                <div>
+                <div className="min-w-0">
                   <p
                     className={
                       isQrValid(validateResult)
@@ -439,7 +628,7 @@ export default function QrAdminPage() {
                         : "text-sm font-extrabold text-red-800"
                     }
                   >
-                    {isQrValid(validateResult) ? "QR صالح" : "QR غير صالح"}
+                    {isQrValid(validateResult) ? "QR صالح" : "QR مرفوض"}
                   </p>
 
                   <p
@@ -455,8 +644,7 @@ export default function QrAdminPage() {
                   </p>
 
                   {validateResult.registration ? (
-                    <p className="mt-2 text-sm font-extrabold text-[#4B4B4B]">
-                      التسجيل:{" "}
+                    <p className="mt-2 truncate text-sm font-extrabold text-[#4B4B4B]">
                       {getRegistrationName(validateResult.registration)}
                     </p>
                   ) : null}
@@ -467,33 +655,41 @@ export default function QrAdminPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
-          <div className="mb-6 flex flex-col gap-4">
+          <div className="mb-6 space-y-4">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div>
-                <CardTitle>تسجيلات QR</CardTitle>
+                <CardTitle>التسجيلات</CardTitle>
+
                 <CardDescription>
-                  اختر تسجيلًا لتوليد QR أو إنشاء صورة أو إلغاء QR الحالي.
+                  افتح ملف QR للتسجيل ثم نفّذ العمليات من داخله.
                 </CardDescription>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={clearFilters}>
-                  مسح الفلاتر
-                </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                {isFiltering ? (
+                  <Button variant="outline" onClick={clearFilters}>
+                    مسح الفلاتر
+                  </Button>
+                ) : null}
 
                 <Button
                   variant="outline"
                   onClick={() => registrationsQuery.refetch()}
+                  disabled={registrationsQuery.isFetching}
                 >
-                  <RefreshCw className="h-4 w-4" />
+                  <RefreshCw
+                    className={`h-4 w-4 ${
+                      registrationsQuery.isFetching ? "animate-spin" : ""
+                    }`}
+                  />
                   تحديث
                 </Button>
               </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-[1fr_280px]">
+            <div className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,280px)] items-center gap-3">
               <Input
                 value={search}
                 placeholder="بحث بالاسم، الهاتف، البريد..."
@@ -514,7 +710,7 @@ export default function QrAdminPage() {
                 options={[
                   { label: "كل الفعاليات", value: "" },
                   ...events.map((event) => ({
-                    label: event.titleAr,
+                    label: event.titleAr || event.titleEn || event.id,
                     value: event.id,
                   })),
                 ]}
@@ -526,6 +722,7 @@ export default function QrAdminPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل التسجيلات...
                 </p>
@@ -536,6 +733,10 @@ export default function QrAdminPage() {
               <div className="text-center">
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل التسجيلات
+                </p>
+
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
                 </p>
 
                 <Button
@@ -555,127 +756,164 @@ export default function QrAdminPage() {
                 </div>
 
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد تسجيلات
+                  {isFiltering ? "لا توجد نتائج" : "لا توجد تسجيلات"}
                 </p>
 
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أنشئ تسجيلات أولًا ثم ارجع لتوليد QR.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها."
+                    : "أنشئ تسجيلات أولًا ثم ارجع لتوليد QR."}
                 </p>
+
+                {isFiltering ? (
+                  <Button
+                    className="mt-5"
+                    variant="outline"
+                    onClick={clearFilters}
+                  >
+                    مسح الفلاتر
+                  </Button>
+                ) : null}
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>الزائر</TableHead>
-                    <TableHead>التواصل</TableHead>
-                    <TableHead>الشركة</TableHead>
-                    <TableHead>نوع الحضور</TableHead>
-                    <TableHead>الحالة</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {registrations.map((registration) => (
-                    <TableRow key={registration.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">
-                            {registration.fullName || "—"}
-                          </p>
-                          <p
-                            dir="ltr"
-                            className="mt-1 text-xs font-bold text-[#4B4B4B]/45"
-                          >
-                            {registration.publicId || registration.id}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="space-y-1">
-                          <p dir="ltr" className="text-sm font-bold">
-                            {registration.phone || "—"}
-                          </p>
-                          <p className="text-xs font-bold text-[#4B4B4B]/45">
-                            {registration.email || "—"}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>{registration.companyName || "—"}</TableCell>
-
-                      <TableCell>
-                        {registration.attendeeType?.nameAr ||
-                          registration.attendeeType?.code ||
-                          "—"}
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="gold">
-                          {registration.status || "—"}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openDetails(registration)}
-                          >
-                            <Eye className="h-4 w-4" />
-                            عرض
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() =>
-                              requestAction("generate", registration)
-                            }
-                          >
-                            <QrCode className="h-4 w-4" />
-                            Generate
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => requestAction("image", registration)}
-                          >
-                            <ImagePlus className="h-4 w-4" />
-                            Image
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() =>
-                              requestAction("revoke", registration)
-                            }
-                          >
-                            <ShieldX className="h-4 w-4" />
-                            Revoke
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table className="w-full table-fixed">
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead className="w-[24%]">الزائر</TableHead>
+                      <TableHead className="w-[22%]">التواصل</TableHead>
+                      <TableHead className="w-[18%]">الشركة</TableHead>
+                      <TableHead className="w-[16%]">النوع</TableHead>
+                      <TableHead className="w-[10%]">الحالة</TableHead>
+                      <TableHead className="w-[10%] text-center">QR</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {registrations.map((registration) => (
+                      <TableRow key={registration.id}>
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate font-extrabold text-[#4B4B4B]">
+                              {registration.fullName || "—"}
+                            </p>
+
+                            <p
+                              dir="ltr"
+                              className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45"
+                            >
+                              {registration.publicId || registration.id}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p
+                              dir="ltr"
+                              className="truncate text-right text-sm font-bold"
+                            >
+                              {getRegistrationContact(registration)}
+                            </p>
+
+                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                              {registration.email || "—"}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {registration.companyName || "—"}
+                          </p>
+
+                          <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                            {registration.jobTitle || "—"}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {registration.attendeeType?.nameAr ||
+                              registration.attendeeType?.code ||
+                              "—"}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <Badge
+                            variant={getRegistrationStatusVariant(
+                              registration.status,
+                            )}
+                          >
+                            {registrationStatusLabels[
+                              registration.status ?? ""
+                            ] ||
+                              registration.status ||
+                              "—"}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="flex flex-nowrap items-center justify-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="فتح ملف QR"
+                              aria-label="فتح ملف QR"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() => openDetails(registration)}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              title="توليد QR"
+                              aria-label="توليد QR"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() =>
+                                requestAction("generate", registration)
+                              }
+                              disabled={isActionLoading}
+                            >
+                              <QrCode className="h-4 w-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              title="إلغاء QR"
+                              aria-label="إلغاء QR"
+                              className="h-8 w-8 shrink-0 p-0"
+                              onClick={() =>
+                                requestAction("revoke", registration)
+                              }
+                              disabled={isActionLoading}
+                            >
+                              <ShieldX className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {registrations.length} من
+                  أصل {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || registrationsQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -683,8 +921,12 @@ export default function QrAdminPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={
+                      page >= totalPages || registrationsQuery.isFetching
+                    }
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -698,13 +940,13 @@ export default function QrAdminPage() {
       <Modal
         open={detailsOpen}
         onClose={closeDetails}
-        title="تفاصيل QR"
+        title="ملف QR"
         description={
           selectedRegistration
-            ? `التسجيل: ${getRegistrationName(selectedRegistration)}`
+            ? getRegistrationName(selectedRegistration)
             : "تفاصيل QR"
         }
-        className="max-w-3xl"
+        className="max-w-4xl"
         footer={
           <>
             <Button variant="outline" onClick={closeDetails}>
@@ -713,7 +955,7 @@ export default function QrAdminPage() {
 
             <Button
               variant="outline"
-              disabled={!currentQrToken}
+              disabled={!currentQrToken || isActionLoading}
               onClick={() => copyText(currentQrToken, "تم نسخ QR Token")}
             >
               <Clipboard className="h-4 w-4" />
@@ -721,73 +963,126 @@ export default function QrAdminPage() {
             </Button>
 
             <Button
-              disabled={!selectedRegistration || isActionLoading}
-              onClick={() => requestAction("image")}
+              variant="danger"
+              disabled={!selectedRegistration || !hasQr || isActionLoading}
+              onClick={() => requestAction("revoke")}
             >
-              <ImagePlus className="h-4 w-4" />
-              إنشاء صورة
+              <ShieldX className="h-4 w-4" />
+              إلغاء QR
             </Button>
           </>
         }
       >
-        {qrQuery.isLoading && !latestQrResult ? (
-          <div className="flex min-h-[240px] items-center justify-center">
+        {isQrLoading ? (
+          <div className="flex min-h-[300px] items-center justify-center">
             <div className="text-center">
               <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
               <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                 جاري تحميل QR...
               </p>
             </div>
           </div>
         ) : (
-          <div className="grid gap-5 lg:grid-cols-[1fr_280px]">
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
-                <p className="text-xs font-bold text-[#4B4B4B]/50">Status</p>
-                <div className="mt-2">
-                  <Badge variant={getStatusVariant(currentQrStatus)}>
-                    {currentQrStatus}
-                  </Badge>
+          <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="min-w-0 space-y-4">
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
+                  <p className="text-xs font-bold text-[#4B4B4B]/50">حالة QR</p>
+
+                  <div className="mt-2">
+                    {currentQrStatus ? (
+                      <Badge variant={getStatusVariant(currentQrStatus)}>
+                        {qrStatusLabels[currentQrStatus] || currentQrStatus}
+                      </Badge>
+                    ) : (
+                      <Badge variant="muted">لا يوجد</Badge>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div className="rounded-2xl border border-black/10 bg-black p-4 text-white">
-                <div className="mb-2 flex items-center gap-2 text-[#D6B06E]">
-                  <QrCode className="h-4 w-4" />
-                  <p className="text-sm font-extrabold">QR Token</p>
-                </div>
-
-                <pre
-                  dir="ltr"
-                  className="custom-scrollbar max-h-40 overflow-auto whitespace-pre-wrap break-all text-left text-xs font-bold leading-6 text-white/80"
-                >
-                  {currentQrToken || "لا يوجد QR Token بعد"}
-                </pre>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
                 <div className="rounded-2xl border border-black/10 bg-white p-4">
                   <p className="text-xs font-bold text-[#4B4B4B]/50">
-                    Valid From
+                    من تاريخ
                   </p>
+
                   <p className="mt-2 text-sm font-extrabold text-[#4B4B4B]">
-                    {formatDate(
-                      currentQr?.validFrom || currentQr?.qr?.validFrom,
-                    )}
+                    {formatDate(currentQrValidFrom)}
                   </p>
                 </div>
 
                 <div className="rounded-2xl border border-black/10 bg-white p-4">
                   <p className="text-xs font-bold text-[#4B4B4B]/50">
-                    Valid Until
+                    حتى تاريخ
                   </p>
+
                   <p className="mt-2 text-sm font-extrabold text-[#4B4B4B]">
-                    {formatDate(
-                      currentQr?.validUntil || currentQr?.qr?.validUntil,
-                    )}
+                    {formatDate(currentQrValidUntil)}
                   </p>
                 </div>
               </div>
+
+              {!hasQr ? (
+                <div className="rounded-3xl border border-[#A88042]/20 bg-[#A88042]/5 p-5">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
+                      <QrCode className="h-6 w-6" />
+                    </div>
+
+                    <div className="min-w-0">
+                      <p className="font-extrabold text-[#4B4B4B]">
+                        لا يوجد QR لهذا التسجيل
+                      </p>
+
+                      <p className="mt-1 text-sm font-bold leading-6 text-[#4B4B4B]/60">
+                        ابدأ بتوليد QR، وبعدها يمكنك إنشاء صورة ونسخها للزائر.
+                      </p>
+
+                      <Button
+                        className="mt-4"
+                        disabled={!selectedRegistration || isActionLoading}
+                        onClick={() => requestAction("generate")}
+                      >
+                        {generateQrMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <QrCode className="h-4 w-4" />
+                        )}
+                        توليد QR
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="min-w-0 rounded-2xl border border-black/10 bg-black p-4 text-white">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-[#D6B06E]">
+                      <QrCode className="h-4 w-4" />
+                      <p className="text-sm font-extrabold">QR Token</p>
+                    </div>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        copyText(currentQrToken, "تم نسخ QR Token")
+                      }
+                    >
+                      <Clipboard className="h-4 w-4" />
+                      نسخ
+                    </Button>
+                  </div>
+
+                  <div
+                    dir="ltr"
+                    className="max-h-32 min-w-0 overflow-y-auto overflow-x-hidden rounded-xl bg-white/5 p-3 text-left text-xs font-bold leading-6 text-white/80"
+                  >
+                    <span className="block max-w-full break-all [overflow-wrap:anywhere]">
+                      {currentQrToken}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -795,36 +1090,49 @@ export default function QrAdminPage() {
                   disabled={!selectedRegistration || isActionLoading}
                   onClick={() => requestAction("generate")}
                 >
-                  <RotateCcw className="h-4 w-4" />
-                  Generate
+                  {generateQrMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-4 w-4" />
+                  )}
+                  توليد جديد
                 </Button>
 
                 <Button
                   variant="outline"
-                  disabled={!selectedRegistration || isActionLoading}
+                  disabled={!selectedRegistration || !hasQr || isActionLoading}
                   onClick={() => requestAction("image")}
                 >
-                  <ImagePlus className="h-4 w-4" />
-                  Image
+                  {createImageMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ImagePlus className="h-4 w-4" />
+                  )}
+                  إنشاء صورة
                 </Button>
 
                 <Button
                   variant="danger"
-                  disabled={!selectedRegistration || isActionLoading}
+                  disabled={!selectedRegistration || !hasQr || isActionLoading}
                   onClick={() => requestAction("revoke")}
                 >
-                  <ShieldX className="h-4 w-4" />
-                  Revoke
+                  {revokeQrMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ShieldX className="h-4 w-4" />
+                  )}
+                  إلغاء
                 </Button>
               </div>
             </div>
 
-            <div className="rounded-[2rem] border border-black/10 bg-[#F8F8FF] p-5">
-              {currentQrImageUrl ? (
+            <div className="min-w-0 rounded-[2rem] border border-black/10 bg-[#F8F8FF] p-5">
+              {hasQrImage ? (
                 <div className="text-center">
                   <img
                     src={currentQrImageUrl}
                     alt="QR Code"
+                    onError={() => setImageBroken(true)}
                     className="mx-auto h-56 w-56 rounded-2xl border border-black/10 bg-white object-contain p-3"
                   />
 
@@ -843,16 +1151,38 @@ export default function QrAdminPage() {
                 <div className="flex min-h-[260px] items-center justify-center">
                   <div className="text-center">
                     <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
-                      <AlertTriangle className="h-8 w-8" />
+                      {imageBroken ? (
+                        <XCircle className="h-8 w-8 text-red-600" />
+                      ) : (
+                        <AlertTriangle className="h-8 w-8" />
+                      )}
                     </div>
 
                     <p className="text-sm font-extrabold text-[#4B4B4B]">
-                      لا توجد صورة QR
+                      {imageBroken ? "تعذر عرض الصورة" : "لا توجد صورة"}
                     </p>
 
                     <p className="mt-2 text-xs font-bold leading-6 text-[#4B4B4B]/55">
-                      اضغط إنشاء صورة QR لعرض الصورة هنا.
+                      {imageBroken
+                        ? "الرابط غير قابل للعرض مباشرة. سيتم استخدام نسخة blob عند إنشاء الصورة."
+                        : hasQr
+                          ? "اضغط إنشاء صورة لعرض QR هنا."
+                          : "ولّد QR أولًا ثم أنشئ الصورة."}
                     </p>
+
+                    <Button
+                      className="mt-4"
+                      variant="outline"
+                      disabled={!hasQr || isActionLoading}
+                      onClick={() => requestAction("image")}
+                    >
+                      {createImageMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ImagePlus className="h-4 w-4" />
+                      )}
+                      إنشاء صورة
+                    </Button>
                   </div>
                 </div>
               )}

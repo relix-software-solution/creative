@@ -7,7 +7,7 @@ import {
   revokeRegistrationQr,
   validateQr,
 } from "./qr.api";
-import { ValidateQrPayload } from "./qr.types";
+import { QrResponse, ValidateQrPayload } from "./qr.types";
 
 export const qrKeys = {
   all: ["qr"] as const,
@@ -17,21 +17,44 @@ export const qrKeys = {
 
 function getErrorMessage(error: unknown) {
   if (error && typeof error === "object" && "response" in error) {
-    const response = error as {
-      response?: {
-        data?: {
-          message?: string | string[];
+    const response = (
+      error as {
+        response?: {
+          data?: {
+            message?: string | string[];
+          };
         };
-      };
-    };
+      }
+    ).response;
 
-    const message = response.response?.data?.message;
+    const message = response?.data?.message;
 
     if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
     if (typeof message === "string") return message;
   }
 
+  if (error instanceof Error && error.message) return error.message;
+
   return "حدث خطأ غير متوقع";
+}
+
+function getRegistrationId(data: QrResponse) {
+  return data.registrationId || data.qr?.registrationId || "";
+}
+
+function updateQrCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  data: QrResponse,
+) {
+  const registrationId = getRegistrationId(data);
+
+  if (!registrationId) return;
+
+  queryClient.setQueryData(qrKeys.registration(registrationId), data);
+
+  queryClient.invalidateQueries({
+    queryKey: qrKeys.registration(registrationId),
+  });
 }
 
 export function useRegistrationQr(registrationId: string) {
@@ -39,6 +62,7 @@ export function useRegistrationQr(registrationId: string) {
     queryKey: qrKeys.registration(registrationId),
     queryFn: () => getRegistrationQr(registrationId),
     enabled: Boolean(registrationId),
+    retry: false,
   });
 }
 
@@ -51,12 +75,7 @@ export function useGenerateRegistrationQr() {
 
     onSuccess: (data) => {
       toast.success("تم توليد QR بنجاح");
-
-      if (data.registrationId) {
-        queryClient.invalidateQueries({
-          queryKey: qrKeys.registration(data.registrationId),
-        });
-      }
+      updateQrCache(queryClient, data);
     },
 
     onError: (error) => {
@@ -74,12 +93,7 @@ export function useCreateRegistrationQrImage() {
 
     onSuccess: (data) => {
       toast.success("تم إنشاء صورة QR بنجاح");
-
-      if (data.registrationId) {
-        queryClient.invalidateQueries({
-          queryKey: qrKeys.registration(data.registrationId),
-        });
-      }
+      updateQrCache(queryClient, data);
     },
 
     onError: (error) => {
@@ -97,12 +111,7 @@ export function useRevokeRegistrationQr() {
 
     onSuccess: (data) => {
       toast.success("تم إلغاء QR بنجاح");
-
-      if (data.registrationId) {
-        queryClient.invalidateQueries({
-          queryKey: qrKeys.registration(data.registrationId),
-        });
-      }
+      updateQrCache(queryClient, data);
     },
 
     onError: (error) => {
@@ -116,12 +125,13 @@ export function useValidateQr() {
     mutationFn: (payload: ValidateQrPayload) => validateQr(payload),
 
     onSuccess: (data) => {
-      if (
+      const isValid =
         data.valid === true ||
         data.allowed === true ||
         data.success === true ||
-        data.decision === "ALLOWED"
-      ) {
+        data.decision === "ALLOWED";
+
+      if (isValid) {
         toast.success(data.message || "QR صالح");
         return;
       }
