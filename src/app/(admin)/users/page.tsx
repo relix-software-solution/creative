@@ -16,7 +16,7 @@ import {
   Users,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmitHandler, useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -143,6 +143,14 @@ export default function UsersPage() {
   const clients = clientsQuery.data?.items ?? [];
   const total = usersQuery.data?.total ?? users.length;
   const totalPages = usersQuery.data?.totalPages ?? 1;
+
+  useEffect(() => {
+    if (!usersQuery.isSuccess) return;
+
+    if (users.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [users.length, usersQuery.isSuccess, page]);
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(

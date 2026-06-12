@@ -12,6 +12,7 @@ export type User = {
   clientId?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  deletedAt?: string | null;
 
   client?: {
     id: string;
@@ -55,4 +56,10 @@ export type UpdateUserPayload = {
 
 export type ResetUserPasswordPayload = {
   newPassword: string;
+};
+
+export type UserActionResponse = {
+  id?: string;
+  message?: string;
+  user?: User;
 };
