@@ -13,7 +13,7 @@ import {
   UsersRound,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmitHandler, useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,8 +51,14 @@ import {
 import { StaffAssignment } from "@/features/staff-ops/staff-ops.types";
 import { useUsers } from "@/features/users/users.queries";
 
+const PAGE_LIMIT = 20;
+
 function formatDate(value?: string | null) {
   if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "—";
 
   return new Intl.DateTimeFormat("ar-SY", {
     year: "numeric",
@@ -60,7 +66,7 @@ function formatDate(value?: string | null) {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function getEventName(assignment: StaffAssignment) {
@@ -113,13 +119,14 @@ export default function StaffAssignmentsPage() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
   const [selectedAssignment, setSelectedAssignment] =
     useState<StaffAssignment | null>(null);
 
   const assignmentsParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
       userId: staffFilter || undefined,
       isActive:
@@ -172,6 +179,13 @@ export default function StaffAssignmentsPage() {
   const total = assignmentsQuery.data?.total ?? assignments.length;
   const totalPages = assignmentsQuery.data?.totalPages ?? 1;
 
+  const isSubmitting = createAssignmentMutation.isPending;
+  const isDeleting = deleteAssignmentMutation.isPending;
+
+  const isFiltering = Boolean(
+    search || eventFilter || staffFilter || activeFilter,
+  );
+
   const filteredAssignments = useMemo(() => {
     if (!search.trim()) return assignments;
 
@@ -188,12 +202,18 @@ export default function StaffAssignmentsPage() {
     });
   }, [assignments, search]);
 
-  const isSubmitting = createAssignmentMutation.isPending;
+  useEffect(() => {
+    if (!assignmentsQuery.isSuccess) return;
+
+    if (assignments.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [assignments.length, assignmentsQuery.isSuccess, page]);
 
   function openCreateModal() {
     form.reset({
       eventId: eventFilter || "",
-      userId: "",
+      userId: staffFilter || "",
       checkpointId: "",
       deviceId: "",
     });
@@ -214,7 +234,7 @@ export default function StaffAssignmentsPage() {
   }
 
   function closeConfirm() {
-    if (deleteAssignmentMutation.isPending) return;
+    if (isDeleting) return;
 
     setSelectedAssignment(null);
     setConfirmOpen(false);
@@ -252,8 +272,24 @@ export default function StaffAssignmentsPage() {
     setActiveFilter("");
   }
 
+  function getEventOptionLabel(event: {
+    id: string;
+    titleAr?: string;
+    titleEn?: string | null;
+  }) {
+    return event.titleAr || event.titleEn || event.id;
+  }
+
+  function getStaffOptionLabel(user: {
+    id: string;
+    fullName?: string | null;
+    email?: string | null;
+  }) {
+    return user.fullName || user.email || user.id;
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Staff Assignments"
         title="تكليفات موظفي السكانر"
@@ -267,13 +303,15 @@ export default function StaffAssignmentsPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-4">
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">
             إجمالي التكليفات
           </p>
 
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {assignmentsQuery.isLoading ? "..." : total}
+            </h3>
 
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <UsersRound className="h-6 w-6" />
@@ -281,38 +319,56 @@ export default function StaffAssignmentsPage() {
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">النشطة</p>
 
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {assignments.filter((item) => item.isActive !== false).length}
+            {assignmentsQuery.isLoading
+              ? "..."
+              : assignments.filter((item) => item.isActive !== false).length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">المعطلة</p>
 
           <h3 className="mt-3 text-3xl font-extrabold text-[#4B4B4B]">
-            {assignments.filter((item) => item.isActive === false).length}
+            {assignmentsQuery.isLoading
+              ? "..."
+              : assignments.filter((item) => item.isActive === false).length}
           </h3>
         </Card>
 
-        <Card className="p-5">
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
           <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
 
-          <div className="mt-3">
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge
               variant={assignmentsQuery.isFetching ? "warning" : "success"}
             >
               {assignmentsQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => assignmentsQuery.refetch()}
+              disabled={assignmentsQuery.isFetching}
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${
+                  assignmentsQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
-          <div className="mb-6 flex flex-col gap-4">
+          <div className="mb-6 space-y-4">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <CardTitle>قائمة التكليفات</CardTitle>
@@ -323,27 +379,29 @@ export default function StaffAssignmentsPage() {
                 </CardDescription>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => assignmentsQuery.refetch()}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  تحديث
-                </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                {isFiltering ? (
+                  <Button variant="outline" onClick={clearFilters}>
+                    مسح الفلاتر
+                  </Button>
+                ) : null}
 
-                <Button variant="outline" onClick={clearFilters}>
-                  مسح الفلاتر
+                <Button variant="outline" onClick={openCreateModal}>
+                  <Plus className="h-4 w-4" />
+                  تكليف جديد
                 </Button>
               </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-[1fr_260px_240px_180px]">
+            <div className="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.75fr)] items-center gap-3">
               <Input
                 value={search}
                 placeholder="بحث بالموظف أو الفعالية أو الجهاز..."
                 icon={<Search className="h-4 w-4" />}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  setPage(1);
+                  setSearch(event.target.value);
+                }}
               />
 
               <Select
@@ -356,7 +414,7 @@ export default function StaffAssignmentsPage() {
                 options={[
                   { label: "كل الفعاليات", value: "" },
                   ...events.map((event) => ({
-                    label: event.titleAr || event.titleEn || event.id,
+                    label: getEventOptionLabel(event),
                     value: event.id,
                   })),
                 ]}
@@ -372,7 +430,7 @@ export default function StaffAssignmentsPage() {
                 options={[
                   { label: "كل الموظفين", value: "" },
                   ...staffUsers.map((user) => ({
-                    label: user.fullName || user.email || user.id,
+                    label: getStaffOptionLabel(user),
                     value: user.id,
                   })),
                 ]}
@@ -411,6 +469,10 @@ export default function StaffAssignmentsPage() {
                   تعذر تحميل التكليفات
                 </p>
 
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
+                </p>
+
                 <Button
                   className="mt-4"
                   variant="danger"
@@ -428,136 +490,173 @@ export default function StaffAssignmentsPage() {
                 </div>
 
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد تكليفات
+                  {isFiltering ? "لا توجد تكليفات مطابقة" : "لا توجد تكليفات"}
                 </p>
 
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  أضف تكليفًا جديدًا حتى يستطيع موظف السكانر العمل مباشرة بعد
-                  تسجيل الدخول.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها لعرض كل التكليفات."
+                    : "أضف تكليفًا جديدًا حتى يستطيع موظف السكانر العمل مباشرة بعد تسجيل الدخول."}
                 </p>
 
-                <Button className="mt-5" onClick={openCreateModal}>
-                  <Plus className="h-4 w-4" />
-                  تكليف جديد
-                </Button>
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openCreateModal}>
+                    <Plus className="h-4 w-4" />
+                    تكليف جديد
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>الموظف</TableHead>
-                    <TableHead>الفعالية</TableHead>
-                    <TableHead>نقطة المسح</TableHead>
-                    <TableHead>الجهاز</TableHead>
-                    <TableHead>الدور</TableHead>
-                    <TableHead>الحالة</TableHead>
-                    <TableHead>تاريخ الإنشاء</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {filteredAssignments.map((assignment) => (
-                    <TableRow key={assignment.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">
-                            {getStaffName(assignment)}
-                          </p>
-
-                          {assignment.user?.email ? (
-                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                              {assignment.user.email}
-                            </p>
-                          ) : null}
-                        </div>
-                      </TableCell>
-
-                      <TableCell>{getEventName(assignment)}</TableCell>
-
-                      <TableCell>
-                        <div>
-                          <p className="text-sm font-bold text-[#4B4B4B]">
-                            {getCheckpointName(assignment)}
-                          </p>
-
-                          {assignment.checkpoint?.type ? (
-                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                              {assignment.checkpoint.type}
-                            </p>
-                          ) : null}
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <div>
-                          <p className="text-sm font-bold text-[#4B4B4B]">
-                            {getDeviceName(assignment)}
-                          </p>
-
-                          {assignment.device?.status ? (
-                            <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
-                              {assignment.device.status}
-                            </p>
-                          ) : null}
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="gold">
-                          {getAssignmentRole(assignment)}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge
-                          variant={
-                            assignment.isActive === false ? "danger" : "success"
-                          }
-                        >
-                          {assignment.isActive === false ? (
-                            <>
-                              <XCircle className="h-4 w-4" />
-                              معطل
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle2 className="h-4 w-4" />
-                              نشط
-                            </>
-                          )}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell>{formatDate(assignment.createdAt)}</TableCell>
-
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          disabled={assignment.isActive === false}
-                          onClick={() => requestDelete(assignment)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          تعطيل
-                        </Button>
-                      </TableCell>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table className="w-full table-fixed">
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead className="w-[18%]">الموظف</TableHead>
+                      <TableHead className="w-[17%]">الفعالية</TableHead>
+                      <TableHead className="w-[18%]">نقطة المسح</TableHead>
+                      <TableHead className="w-[16%]">الجهاز</TableHead>
+                      <TableHead className="w-[10%]">الدور</TableHead>
+                      <TableHead className="w-[10%]">الحالة</TableHead>
+                      <TableHead className="w-[8%]">التاريخ</TableHead>
+                      <TableHead className="w-[7%] text-center">
+                        الإجراء
+                      </TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+
+                  <TableBody>
+                    {filteredAssignments.map((assignment) => (
+                      <TableRow key={assignment.id}>
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate font-extrabold text-[#4B4B4B]">
+                              {getStaffName(assignment)}
+                            </p>
+
+                            {assignment.user?.email ? (
+                              <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                                {assignment.user.email}
+                              </p>
+                            ) : null}
+
+                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/35">
+                              ID: {assignment.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {getEventName(assignment)}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-[#4B4B4B]">
+                              {getCheckpointName(assignment)}
+                            </p>
+
+                            {assignment.checkpoint?.type ? (
+                              <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                                {assignment.checkpoint.type}
+                              </p>
+                            ) : null}
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-[#4B4B4B]">
+                              {getDeviceName(assignment)}
+                            </p>
+
+                            {assignment.device?.status ? (
+                              <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
+                                {assignment.device.status}
+                              </p>
+                            ) : null}
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <Badge variant="gold">
+                            {getAssignmentRole(assignment)}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <Badge
+                            variant={
+                              assignment.isActive === false
+                                ? "danger"
+                                : "success"
+                            }
+                          >
+                            {assignment.isActive === false ? (
+                              <>
+                                <XCircle className="h-4 w-4" />
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle2 className="h-4 w-4" />
+                              </>
+                            )}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <p className="truncate">
+                            {formatDate(assignment.createdAt)}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="flex justify-center">
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              title="تعطيل"
+                              aria-label="تعطيل"
+                              className="h-8 w-8 shrink-0 p-0"
+                              disabled={
+                                assignment.isActive === false || isDeleting
+                              }
+                              onClick={() => requestDelete(assignment)}
+                            >
+                              {isDeleting &&
+                              selectedAssignment?.id === assignment.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض{" "}
+                  {filteredAssignments.length} من أصل {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || assignmentsQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -565,8 +664,10 @@ export default function StaffAssignmentsPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || assignmentsQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -633,7 +734,7 @@ export default function StaffAssignmentsPage() {
               });
             }}
             options={events.map((event) => ({
-              label: event.titleAr || event.titleEn || event.id,
+              label: getEventOptionLabel(event),
               value: event.id,
             }))}
           />
@@ -650,7 +751,7 @@ export default function StaffAssignmentsPage() {
               });
             }}
             options={staffUsers.map((user) => ({
-              label: `${user.fullName || user.email || user.id}${
+              label: `${getStaffOptionLabel(user)}${
                 user.email ? ` - ${user.email}` : ""
               }`,
               value: user.id,
@@ -703,12 +804,14 @@ export default function StaffAssignmentsPage() {
                 shouldValidate: true,
               });
             }}
-            options={devices.map((device) => ({
-              label: `${device.name || device.code || device.id}${
-                device.code ? ` - ${device.code}` : ""
-              }`,
-              value: device.id,
-            }))}
+            options={devices
+              .filter((device) => device.status !== "REVOKED")
+              .map((device) => ({
+                label: `${device.name || device.code || device.id}${
+                  device.code ? ` - ${device.code}` : ""
+                }`,
+                value: device.id,
+              }))}
           />
 
           <div className="rounded-2xl border border-[#A88042]/20 bg-[#A88042]/5 p-4">
@@ -737,7 +840,7 @@ export default function StaffAssignmentsPage() {
         }
         confirmText="تعطيل"
         variant="danger"
-        isLoading={deleteAssignmentMutation.isPending}
+        isLoading={isDeleting}
         onClose={closeConfirm}
         onConfirm={confirmDelete}
       />

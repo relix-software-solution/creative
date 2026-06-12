@@ -4,15 +4,19 @@ import {
   createStaffAssignment,
   deleteStaffAssignment,
   endStaffSession,
+  getStaffAssignments,
   getStaffSession,
   getStaffSessions,
-  getStaffAssignments,
   startStaffSession,
 } from "./staff-ops.api";
 import {
   CreateStaffAssignmentPayload,
+  StaffAssignment,
   StaffAssignmentsListParams,
+  StaffAssignmentsListResponse,
   StaffSessionsListParams,
+  StaffSession,
+  StaffSessionsListResponse,
   StartStaffSessionPayload,
 } from "./staff-ops.types";
 
@@ -32,18 +36,29 @@ export const staffOpsKeys = {
 
 function getErrorMessage(error: unknown) {
   if (error && typeof error === "object" && "response" in error) {
-    const response = error as {
-      response?: {
-        data?: {
-          message?: string | string[];
+    const response = (
+      error as {
+        response?: {
+          data?: {
+            message?: string | string[];
+          };
         };
-      };
-    };
+      }
+    ).response;
 
-    const message = response.response?.data?.message;
+    const message = response?.data?.message;
 
-    if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
-    if (typeof message === "string") return message;
+    if (Array.isArray(message)) {
+      return message[0] ?? "حدث خطأ غير متوقع";
+    }
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
   return "حدث خطأ غير متوقع";
@@ -61,10 +76,81 @@ function invalidateSessions(queryClient: ReturnType<typeof useQueryClient>) {
   });
 }
 
+function removeAssignmentFromLists(
+  queryClient: ReturnType<typeof useQueryClient>,
+  id: string,
+) {
+  queryClient.setQueriesData<StaffAssignmentsListResponse>(
+    {
+      queryKey: staffOpsKeys.assignments(),
+    },
+    (oldData) => {
+      if (!oldData) return oldData;
+
+      const nextItems = oldData.items.filter(
+        (assignment) => assignment.id !== id,
+      );
+      const currentTotal = oldData.total ?? oldData.items.length;
+      const nextTotal = Math.max(currentTotal - 1, 0);
+      const limit = oldData.limit || 20;
+
+      return {
+        ...oldData,
+        items: nextItems,
+        total: nextTotal,
+        totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+      };
+    },
+  );
+}
+
+function updateAssignmentInLists(
+  queryClient: ReturnType<typeof useQueryClient>,
+  assignment: StaffAssignment,
+) {
+  queryClient.setQueriesData<StaffAssignmentsListResponse>(
+    {
+      queryKey: staffOpsKeys.assignments(),
+    },
+    (oldData) => {
+      if (!oldData) return oldData;
+
+      return {
+        ...oldData,
+        items: oldData.items.map((item) =>
+          item.id === assignment.id ? { ...item, ...assignment } : item,
+        ),
+      };
+    },
+  );
+}
+
+function updateSessionInLists(
+  queryClient: ReturnType<typeof useQueryClient>,
+  session: StaffSession,
+) {
+  queryClient.setQueriesData<StaffSessionsListResponse>(
+    {
+      queryKey: staffOpsKeys.sessions(),
+    },
+    (oldData) => {
+      if (!oldData) return oldData;
+
+      return {
+        ...oldData,
+        items: oldData.items.map((item) =>
+          item.id === session.id ? { ...item, ...session } : item,
+        ),
+      };
+    },
+  );
+}
+
 export function useStaffAssignments(params: StaffAssignmentsListParams = {}) {
   return useQuery({
     queryKey: staffOpsKeys.assignmentsList(params),
     queryFn: () => getStaffAssignments(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -75,8 +161,9 @@ export function useCreateStaffAssignment() {
     mutationFn: (payload: CreateStaffAssignmentPayload) =>
       createStaffAssignment(payload),
 
-    onSuccess: () => {
+    onSuccess: (assignment) => {
       toast.success("تم إنشاء تكليف الموظف بنجاح");
+      updateAssignmentInLists(queryClient, assignment);
       invalidateAssignments(queryClient);
     },
 
@@ -92,8 +179,9 @@ export function useDeleteStaffAssignment() {
   return useMutation({
     mutationFn: (id: string) => deleteStaffAssignment(id),
 
-    onSuccess: () => {
+    onSuccess: ({ id }) => {
       toast.success("تم تعطيل التكليف بنجاح");
+      removeAssignmentFromLists(queryClient, id);
       invalidateAssignments(queryClient);
     },
 
@@ -107,6 +195,7 @@ export function useStaffSessions(params: StaffSessionsListParams = {}) {
   return useQuery({
     queryKey: staffOpsKeys.sessionsList(params),
     queryFn: () => getStaffSessions(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -142,8 +231,9 @@ export function useEndStaffSession() {
   return useMutation({
     mutationFn: (id: string) => endStaffSession(id),
 
-    onSuccess: () => {
+    onSuccess: (session) => {
       toast.success("تم إنهاء جلسة الموظف بنجاح");
+      updateSessionInLists(queryClient, session);
       invalidateSessions(queryClient);
     },
 

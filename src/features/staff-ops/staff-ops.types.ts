@@ -72,6 +72,13 @@ export type CreateStaffAssignmentPayload = {
   deviceId: string;
 };
 
+export type StaffAssignmentActionResponse = {
+  id?: string;
+  message?: string;
+  assignment?: StaffAssignment;
+  staffAssignment?: StaffAssignment;
+};
+
 export type StaffSessionStatus =
   | "ACTIVE"
   | "ENDED"
