@@ -13,7 +13,7 @@ import {
   UserRoundCheck,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmitHandler, useForm } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,11 +54,13 @@ import {
   StaffSessionStatus,
 } from "@/features/staff-ops/staff-ops.types";
 
+const PAGE_LIMIT = 20;
+
 const statusLabels: Record<string, string> = {
   ACTIVE: "نشطة",
   ENDED: "منتهية",
   CLOSED: "مغلقة",
-  EXPIRED: "منتهية الصلاحية",
+  EXPIRED: "منتهية",
 };
 
 function getStatusVariant(
@@ -73,13 +75,24 @@ function getStatusVariant(
 function formatDateTime(value?: string | null) {
   if (!value) return "—";
 
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "—";
+
   return new Intl.DateTimeFormat("ar-SY", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
+    month: "2-digit",
+    day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
+}
+
+function getStatusIcon(session: StaffSession) {
+  if (isActiveSession(session)) {
+    return <CheckCircle2 className="h-4 w-4" />;
+  }
+
+  return <XCircle className="h-4 w-4" />;
 }
 
 function getEventName(session: StaffSession) {
@@ -134,7 +147,7 @@ export default function StaffSessionsPage() {
   const sessionsParams = useMemo(
     () => ({
       page,
-      limit: 20,
+      limit: PAGE_LIMIT,
       eventId: eventFilter || undefined,
       staffUserId: staffFilter || undefined,
       deviceId: deviceFilter || undefined,
@@ -152,7 +165,6 @@ export default function StaffSessionsPage() {
   );
 
   const sessionsQuery = useStaffSessions(sessionsParams);
-
   const eventsQuery = useEvents({ page: 1, limit: 100 });
   const usersQuery = useUsers({ page: 1, limit: 100, role: "STAFF" });
 
@@ -180,6 +192,20 @@ export default function StaffSessionsPage() {
   const total = sessionsQuery.data?.total ?? sessions.length;
   const totalPages = sessionsQuery.data?.totalPages ?? 1;
 
+  const activeSessionsCount = sessions.filter(isActiveSession).length;
+  const endedSessionsCount = sessions.filter(
+    (session) => !isActiveSession(session),
+  ).length;
+
+  const isFiltering = Boolean(
+    search ||
+    eventFilter ||
+    staffFilter ||
+    deviceFilter ||
+    checkpointFilter ||
+    statusFilter,
+  );
+
   const filteredSessions = useMemo(() => {
     if (!search.trim()) return sessions;
 
@@ -195,11 +221,6 @@ export default function StaffSessionsPage() {
       );
     });
   }, [sessions, search]);
-
-  const activeSessionsCount = sessions.filter(isActiveSession).length;
-  const endedSessionsCount = sessions.filter(
-    (session) => !isActiveSession(session),
-  ).length;
 
   const form = useForm<StartStaffSessionFormValues>({
     resolver: zodResolver(startStaffSessionSchema),
@@ -228,6 +249,14 @@ export default function StaffSessionsPage() {
   const formDevices = formDevicesQuery.data?.items ?? [];
   const formCheckpoints = formCheckpointsQuery.data?.items ?? [];
 
+  useEffect(() => {
+    if (!sessionsQuery.isSuccess) return;
+
+    if (sessions.length === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1));
+    }
+  }, [sessions.length, sessionsQuery.isSuccess, page]);
+
   function openStartModal() {
     form.reset({
       eventId: eventFilter || "",
@@ -241,6 +270,7 @@ export default function StaffSessionsPage() {
 
   function closeModal() {
     if (startSessionMutation.isPending) return;
+
     setModalOpen(false);
     form.reset();
   }
@@ -252,6 +282,7 @@ export default function StaffSessionsPage() {
 
   function closeConfirm() {
     if (endSessionMutation.isPending) return;
+
     setSelectedSession(null);
     setConfirmOpen(false);
   }
@@ -290,26 +321,44 @@ export default function StaffSessionsPage() {
     setStatusFilter("");
   }
 
+  function getEventOptionLabel(event: {
+    id: string;
+    titleAr?: string | null;
+    titleEn?: string | null;
+  }) {
+    return event.titleAr || event.titleEn || event.id;
+  }
+
+  function getStaffOptionLabel(user: {
+    id: string;
+    fullName?: string | null;
+    email?: string | null;
+  }) {
+    return user.fullName || user.email || user.id;
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       <PageHeader
         eyebrow="Staff Sessions"
         title="جلسات الموظفين"
-        description="مراقبة جلسات موظفي التشغيل المرتبطة بالفعاليات والأجهزة ونقاط الدخول، مع إمكانية إنهاء الجلسات النشطة."
+        description="مراقبة تشغيل موظفي السكانر على الأجهزة ونقاط الدخول."
         actions={
           <Button onClick={openStartModal}>
             <Plus className="h-4 w-4" />
-            بدء جلسة
+            جلسة جديدة
           </Button>
         }
       />
 
       <section className="grid gap-4 md:grid-cols-4">
-        <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">إجمالي الجلسات</p>
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
+          <p className="text-sm font-bold text-[#4B4B4B]/60">الجلسات</p>
 
           <div className="mt-3 flex items-center justify-between">
-            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">{total}</h3>
+            <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
+              {sessionsQuery.isLoading ? "..." : total}
+            </h3>
 
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#A88042]/10 text-[#A88042]">
               <UserRoundCheck className="h-6 w-6" />
@@ -317,80 +366,96 @@ export default function StaffSessionsPage() {
           </div>
         </Card>
 
-        <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">النشطة</p>
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
+          <p className="text-sm font-bold text-[#4B4B4B]/60">نشطة</p>
 
           <div className="mt-3 flex items-center justify-between">
             <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
-              {activeSessionsCount}
+              {sessionsQuery.isLoading ? "..." : activeSessionsCount}
             </h3>
 
             <Badge variant="success">
               <CheckCircle2 className="h-4 w-4" />
-              Active
+              نشطة
             </Badge>
           </div>
         </Card>
 
-        <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">المنتهية</p>
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
+          <p className="text-sm font-bold text-[#4B4B4B]/60">منتهية</p>
 
           <div className="mt-3 flex items-center justify-between">
             <h3 className="text-3xl font-extrabold text-[#4B4B4B]">
-              {endedSessionsCount}
+              {sessionsQuery.isLoading ? "..." : endedSessionsCount}
             </h3>
 
             <Badge variant="muted">
               <TimerOff className="h-4 w-4" />
-              Ended
+              منتهية
             </Badge>
           </div>
         </Card>
 
-        <Card className="p-5">
-          <p className="text-sm font-bold text-[#4B4B4B]/60">حالة البيانات</p>
+        <Card className="overflow-hidden border-black/5 p-5 shadow-sm">
+          <p className="text-sm font-bold text-[#4B4B4B]/60">البيانات</p>
 
-          <div className="mt-3">
+          <div className="mt-3 flex items-center justify-between gap-3">
             <Badge variant={sessionsQuery.isFetching ? "warning" : "success"}>
               {sessionsQuery.isFetching ? "تحديث..." : "مستقرة"}
             </Badge>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => sessionsQuery.refetch()}
+              disabled={sessionsQuery.isFetching}
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${
+                  sessionsQuery.isFetching ? "animate-spin" : ""
+                }`}
+              />
+              تحديث
+            </Button>
           </div>
         </Card>
       </section>
 
-      <Card>
+      <Card className="overflow-hidden border-black/5 shadow-sm">
         <CardContent>
-          <div className="mb-6 flex flex-col gap-4">
+          <div className="mb-6 space-y-4">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <CardTitle>قائمة الجلسات</CardTitle>
+
                 <CardDescription>
-                  كل جلسة تمثل فترة تشغيل فعلية لموظف Staff على جهاز ونقطة دخول
-                  محددة.
+                  كل صف يمثل فترة تشغيل فعلية لموظف على جهاز ونقطة دخول.
                 </CardDescription>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => sessionsQuery.refetch()}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  تحديث
-                </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                {isFiltering ? (
+                  <Button variant="outline" onClick={clearFilters}>
+                    مسح الفلاتر
+                  </Button>
+                ) : null}
 
-                <Button variant="outline" onClick={clearFilters}>
-                  مسح الفلاتر
+                <Button variant="outline" onClick={openStartModal}>
+                  <Plus className="h-4 w-4" />
+                  جلسة جديدة
                 </Button>
               </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-[1fr_250px_220px_220px]">
+            <div className="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)] items-center gap-3">
               <Input
                 value={search}
-                placeholder="بحث بالموظف، الجهاز، الفعالية، الجلسة..."
+                placeholder="بحث..."
                 icon={<Search className="h-4 w-4" />}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  setPage(1);
+                  setSearch(event.target.value);
+                }}
               />
 
               <Select
@@ -405,7 +470,7 @@ export default function StaffSessionsPage() {
                 options={[
                   { label: "كل الفعاليات", value: "" },
                   ...events.map((event) => ({
-                    label: event.titleAr,
+                    label: getEventOptionLabel(event),
                     value: event.id,
                   })),
                 ]}
@@ -421,7 +486,7 @@ export default function StaffSessionsPage() {
                 options={[
                   { label: "كل الموظفين", value: "" },
                   ...staffUsers.map((user) => ({
-                    label: user.fullName,
+                    label: getStaffOptionLabel(user),
                     value: user.id,
                   })),
                 ]}
@@ -439,12 +504,12 @@ export default function StaffSessionsPage() {
                   { label: "نشطة", value: "ACTIVE" },
                   { label: "منتهية", value: "ENDED" },
                   { label: "مغلقة", value: "CLOSED" },
-                  { label: "منتهية الصلاحية", value: "EXPIRED" },
+                  { label: "منتهية", value: "EXPIRED" },
                 ]}
               />
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-2">
+            <div className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-3">
               <Select
                 value={deviceFilter}
                 placeholder="كل الأجهزة"
@@ -454,10 +519,14 @@ export default function StaffSessionsPage() {
                 }}
                 options={[
                   { label: "كل الأجهزة", value: "" },
-                  ...devices.map((device) => ({
-                    label: `${device.name}${device.code ? ` - ${device.code}` : ""}`,
-                    value: device.id,
-                  })),
+                  ...devices
+                    .filter((device) => device.status !== "REVOKED")
+                    .map((device) => ({
+                      label: `${device.name || device.code || device.id}${
+                        device.code ? ` - ${device.code}` : ""
+                      }`,
+                      value: device.id,
+                    })),
                 ]}
               />
 
@@ -470,11 +539,13 @@ export default function StaffSessionsPage() {
                 }}
                 options={[
                   { label: "كل نقاط الدخول", value: "" },
-                  ...checkpoints.map((checkpoint) => ({
-                    label:
-                      checkpoint.nameAr || checkpoint.nameEn || checkpoint.id,
-                    value: checkpoint.id,
-                  })),
+                  ...checkpoints
+                    .filter((checkpoint) => checkpoint.isActive !== false)
+                    .map((checkpoint) => ({
+                      label:
+                        checkpoint.nameAr || checkpoint.nameEn || checkpoint.id,
+                      value: checkpoint.id,
+                    })),
                 ]}
               />
             </div>
@@ -484,6 +555,7 @@ export default function StaffSessionsPage() {
             <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
               <div className="text-center">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
+
                 <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
                   جاري تحميل الجلسات...
                 </p>
@@ -494,6 +566,10 @@ export default function StaffSessionsPage() {
               <div className="text-center">
                 <p className="text-lg font-extrabold text-red-700">
                   تعذر تحميل الجلسات
+                </p>
+
+                <p className="mt-2 text-sm font-bold text-red-600/70">
+                  تحقق من الاتصال بالباك أو صلاحية الجلسة.
                 </p>
 
                 <Button
@@ -513,121 +589,186 @@ export default function StaffSessionsPage() {
                 </div>
 
                 <p className="text-lg font-extrabold text-[#4B4B4B]">
-                  لا توجد جلسات
+                  {isFiltering ? "لا توجد نتائج" : "لا توجد جلسات"}
                 </p>
 
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  ستظهر هنا جلسات موظفي التشغيل عند بدء العمل على السكانر.
+                  {isFiltering
+                    ? "جرّب تعديل الفلاتر أو امسحها."
+                    : "ستظهر هنا جلسات موظفي السكانر عند بدء التشغيل."}
                 </p>
 
-                <Button className="mt-5" onClick={openStartModal}>
-                  <Plus className="h-4 w-4" />
-                  بدء جلسة
-                </Button>
+                <div className="mt-5 flex justify-center gap-2">
+                  {isFiltering ? (
+                    <Button variant="outline" onClick={clearFilters}>
+                      مسح الفلاتر
+                    </Button>
+                  ) : null}
+
+                  <Button onClick={openStartModal}>
+                    <Plus className="h-4 w-4" />
+                    جلسة جديدة
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>الموظف</TableHead>
-                    <TableHead>الفعالية</TableHead>
-                    <TableHead>الجهاز</TableHead>
-                    <TableHead>نقطة الدخول</TableHead>
-                    <TableHead>الحالة</TableHead>
-                    <TableHead>البداية</TableHead>
-                    <TableHead>النهاية</TableHead>
-                    <TableHead>الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
+              <div className="overflow-hidden rounded-3xl border border-black/5">
+                <Table className="w-full table-fixed">
+                  <TableHeader>
+                    <TableRow className="bg-[#F8F8FF]">
+                      <TableHead className="w-[20%]">الموظف</TableHead>
+                      <TableHead className="w-[17%]">الفعالية</TableHead>
+                      <TableHead className="w-[15%]">الجهاز</TableHead>
+                      <TableHead className="w-[16%]">النقطة</TableHead>
+                      <TableHead className="w-[7%] text-center">
+                        الحالة
+                      </TableHead>
+                      <TableHead className="w-[10%]">البداية</TableHead>
+                      <TableHead className="w-[10%]">النهاية</TableHead>
+                      <TableHead className="w-[5%] text-center">
+                        إجراء
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
 
-                <TableBody>
-                  {filteredSessions.map((session) => (
-                    <TableRow key={session.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-extrabold">
-                            {getStaffName(session)}
-                          </p>
+                  <TableBody>
+                    {filteredSessions.map((session) => (
+                      <TableRow key={session.id}>
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate font-extrabold text-[#4B4B4B]">
+                              {getStaffName(session)}
+                            </p>
 
-                          <p
-                            dir="ltr"
-                            className="mt-1 break-all text-xs font-bold text-[#4B4B4B]/45"
-                          >
-                            {session.staffUser?.email || session.staffUserId}
-                          </p>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>{getEventName(session)}</TableCell>
-
-                      <TableCell>
-                        <div>
-                          <p className="font-bold">{getDeviceName(session)}</p>
-
-                          {session.device?.code ? (
                             <p
                               dir="ltr"
-                              className="mt-1 text-xs font-bold text-[#4B4B4B]/45"
+                              className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45"
                             >
-                              {session.device.code}
+                              {session.staffUser?.email || session.staffUserId}
                             </p>
-                          ) : null}
-                        </div>
-                      </TableCell>
 
-                      <TableCell>{getCheckpointName(session)}</TableCell>
+                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/35">
+                              ID: {session.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </TableCell>
 
-                      <TableCell>
-                        <Badge variant={getStatusVariant(session.status)}>
-                          {isActiveSession(session) ? (
-                            <>
-                              <CheckCircle2 className="h-4 w-4" />
-                              نشطة
-                            </>
-                          ) : (
-                            <>
-                              <XCircle className="h-4 w-4" />
-                              {statusLabels[session.status ?? ""] ||
-                                session.status ||
-                                "منتهية"}
-                            </>
-                          )}
-                        </Badge>
-                      </TableCell>
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {getEventName(session)}
+                          </p>
+                        </TableCell>
 
-                      <TableCell>
-                        {formatDateTime(session.startedAt || session.createdAt)}
-                      </TableCell>
+                        <TableCell className="align-top">
+                          <div className="min-w-0">
+                            <p className="truncate font-bold">
+                              {getDeviceName(session)}
+                            </p>
 
-                      <TableCell>{formatDateTime(session.endedAt)}</TableCell>
+                            {session.device?.code ? (
+                              <p
+                                dir="ltr"
+                                className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45"
+                              >
+                                {session.device.code}
+                              </p>
+                            ) : null}
+                          </div>
+                        </TableCell>
 
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          disabled={!isActiveSession(session)}
-                          onClick={() => requestEndSession(session)}
-                        >
-                          <TimerOff className="h-4 w-4" />
-                          إنهاء
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                        <TableCell className="align-top">
+                          <p className="truncate font-bold">
+                            {getCheckpointName(session)}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="flex justify-center">
+                            <Badge
+                              variant={getStatusVariant(session.status)}
+                              title={
+                                isActiveSession(session)
+                                  ? "نشطة"
+                                  : statusLabels[session.status ?? ""] ||
+                                    "منتهية"
+                              }
+                              aria-label={
+                                isActiveSession(session)
+                                  ? "نشطة"
+                                  : statusLabels[session.status ?? ""] ||
+                                    "منتهية"
+                              }
+                              className="h-8 w-8 justify-center rounded-full p-0"
+                            >
+                              {getStatusIcon(session)}
+                            </Badge>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <p
+                            dir="ltr"
+                            className="truncate text-right text-sm font-bold text-[#4B4B4B]"
+                            title={formatDateTime(
+                              session.startedAt || session.createdAt,
+                            )}
+                          >
+                            {formatDateTime(
+                              session.startedAt || session.createdAt,
+                            )}
+                          </p>
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <p
+                            dir="ltr"
+                            className="truncate text-right text-sm font-bold text-[#4B4B4B]"
+                            title={formatDateTime(session.endedAt)}
+                          >
+                            {formatDateTime(session.endedAt)}
+                          </p>
+                        </TableCell>
+
+                        <TableCell className="align-top">
+                          <div className="flex justify-center">
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              title="إنهاء"
+                              aria-label="إنهاء"
+                              className="h-8 w-8 shrink-0 p-0"
+                              disabled={
+                                !isActiveSession(session) ||
+                                endSessionMutation.isPending
+                              }
+                              onClick={() => requestEndSession(session)}
+                            >
+                              {endSessionMutation.isPending &&
+                              selectedSession?.id === session.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <TimerOff className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
-                  الصفحة {page} من {totalPages}
+                  الصفحة {page} من {totalPages} — عرض {filteredSessions.length}{" "}
+                  من أصل {total}
                 </p>
 
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    disabled={page <= 1}
+                    disabled={page <= 1 || sessionsQuery.isFetching}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                   >
                     السابق
@@ -635,8 +776,10 @@ export default function StaffSessionsPage() {
 
                   <Button
                     variant="outline"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((value) => value + 1)}
+                    disabled={page >= totalPages || sessionsQuery.isFetching}
+                    onClick={() =>
+                      setPage((value) => Math.min(totalPages, value + 1))
+                    }
                   >
                     التالي
                   </Button>
@@ -651,7 +794,7 @@ export default function StaffSessionsPage() {
         open={modalOpen}
         onClose={closeModal}
         title="بدء جلسة موظف"
-        description="يمكن للأدمن بدء جلسة تشغيل يدويًا لموظف على جهاز ونقطة دخول محددة."
+        description="تشغيل يدوي لموظف على جهاز ونقطة دخول محددة."
         className="max-w-2xl"
         footer={
           <>
@@ -672,7 +815,7 @@ export default function StaffSessionsPage() {
               ) : (
                 <ShieldCheck className="h-4 w-4" />
               )}
-              بدء الجلسة
+              بدء
             </Button>
           </>
         }
@@ -703,7 +846,7 @@ export default function StaffSessionsPage() {
               });
             }}
             options={events.map((event) => ({
-              label: event.titleAr,
+              label: getEventOptionLabel(event),
               value: event.id,
             }))}
           />
@@ -711,7 +854,7 @@ export default function StaffSessionsPage() {
           <Select
             label="الموظف Staff"
             value={form.watch("staffUserId")}
-            placeholder="اختر موظف التشغيل"
+            placeholder="اختر الموظف"
             error={form.formState.errors.staffUserId?.message}
             onChange={(value) => {
               form.setValue("staffUserId", value, {
@@ -720,7 +863,9 @@ export default function StaffSessionsPage() {
               });
             }}
             options={staffUsers.map((user) => ({
-              label: `${user.fullName}${user.email ? ` - ${user.email}` : ""}`,
+              label: `${getStaffOptionLabel(user)}${
+                user.email ? ` - ${user.email}` : ""
+              }`,
               value: user.id,
             }))}
           />
@@ -740,10 +885,14 @@ export default function StaffSessionsPage() {
                   shouldValidate: true,
                 });
               }}
-              options={formDevices.map((device) => ({
-                label: `${device.name}${device.code ? ` - ${device.code}` : ""}`,
-                value: device.id,
-              }))}
+              options={formDevices
+                .filter((device) => device.status !== "REVOKED")
+                .map((device) => ({
+                  label: `${device.name || device.code || device.id}${
+                    device.code ? ` - ${device.code}` : ""
+                  }`,
+                  value: device.id,
+                }))}
             />
 
             <Select
@@ -760,21 +909,24 @@ export default function StaffSessionsPage() {
                   shouldValidate: true,
                 });
               }}
-              options={formCheckpoints.map((checkpoint) => ({
-                label: checkpoint.nameAr || checkpoint.nameEn || checkpoint.id,
-                value: checkpoint.id,
-              }))}
+              options={formCheckpoints
+                .filter((checkpoint) => checkpoint.isActive !== false)
+                .map((checkpoint) => ({
+                  label:
+                    checkpoint.nameAr || checkpoint.nameEn || checkpoint.id,
+                  value: checkpoint.id,
+                }))}
             />
           </div>
 
           <div className="rounded-2xl border border-[#A88042]/20 bg-[#A88042]/5 p-4">
             <p className="text-sm font-extrabold text-[#4B4B4B]">
-              ملاحظة تشغيلية
+              ملاحظة مختصرة
             </p>
 
             <p className="mt-1 text-xs font-bold leading-6 text-[#4B4B4B]/55">
-              عادةً سيبدأ الموظف الجلسة من واجهة Staff Scanner، لكن هذه العملية
-              متاحة للأدمن للمراقبة أو التشغيل اليدوي عند الحاجة.
+              غالبًا الموظف يبدأ الجلسة من واجهة السكانر، وهذه الصفحة للمراقبة
+              أو التشغيل اليدوي عند الحاجة.
             </p>
           </div>
         </form>
@@ -782,15 +934,13 @@ export default function StaffSessionsPage() {
 
       <ConfirmDialog
         open={confirmOpen}
-        title="إنهاء جلسة الموظف"
+        title="إنهاء الجلسة"
         description={
           selectedSession
-            ? `سيتم إنهاء جلسة ${getStaffName(
-                selectedSession,
-              )} على جهاز ${getDeviceName(selectedSession)}.`
+            ? `سيتم إنهاء جلسة ${getStaffName(selectedSession)}.`
             : "سيتم إنهاء هذه الجلسة."
         }
-        confirmText="إنهاء الجلسة"
+        confirmText="إنهاء"
         variant="danger"
         isLoading={endSessionMutation.isPending}
         onClose={closeConfirm}

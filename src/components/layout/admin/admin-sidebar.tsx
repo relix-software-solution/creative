@@ -64,7 +64,6 @@ const navigationGroups = [
         icon: UserCheck,
       },
       { title: "جلسات الموظفين", href: "/staff-sessions", icon: Clock3 },
-      { title: "السكانر", href: "/scanner", icon: QrCode },
       { title: "إدارة QR", href: "/qr", icon: QrCode },
     ],
   },
