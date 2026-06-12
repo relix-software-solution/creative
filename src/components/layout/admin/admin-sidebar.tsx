@@ -82,11 +82,11 @@ export function AdminSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="fixed right-0 top-0 z-40 hidden h-screen w-72 overflow-hidden bg-black text-white lg:block">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(168,128,66,0.22),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(255,255,255,0.08),transparent_38%)]" />
+    <aside className="fixed right-0 top-0 z-50 hidden h-screen w-72 overflow-hidden border-l border-white/10 bg-black text-white lg:block">
+      <div className="absolute inset-0 " />
 
       <div className="relative flex h-full flex-col">
-        <div className="border-b border-white/10 px-6 py-6">
+        <div className="shrink-0 border-b border-white/10 px-6 py-6">
           <AdminLogo />
         </div>
 
@@ -133,7 +133,7 @@ export function AdminSidebar() {
           ))}
         </nav>
 
-        <div className="relative mx-4 mb-5 rounded-3xl border border-white/10 bg-white/[0.06] p-4">
+        <div className="relative mx-4 mb-5 shrink-0 rounded-3xl border border-white/10 bg-white/[0.06] p-4">
           <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-[#A88042]/20 text-[#C59B55]">
             <ShieldCheck className="h-5 w-5" />
           </div>
