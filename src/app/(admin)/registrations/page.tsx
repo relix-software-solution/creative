@@ -1008,27 +1008,6 @@ export default function RegistrationsPage() {
           />
 
           <div className="space-y-2 lg:col-span-2">
-            <label className="text-sm font-bold text-[#4B4B4B]">
-              الحقول الإضافية JSON
-            </label>
-
-            <textarea
-              {...form.register("customFieldsJson")}
-              rows={5}
-              dir="ltr"
-              disabled={isSubmitting}
-              placeholder={`{\n  "mealPreference": "regular"\n}`}
-              className="custom-scrollbar w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-left font-mono text-sm text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
-            />
-
-            {form.formState.errors.customFieldsJson ? (
-              <p className="text-sm font-bold text-red-600">
-                {form.formState.errors.customFieldsJson.message}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="space-y-2 lg:col-span-2">
             <label className="text-sm font-bold text-[#4B4B4B]">ملاحظات</label>
 
             <textarea
