@@ -2,15 +2,8 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import {
-  ArrowRight,
-  CalendarDays,
-  CheckCircle2,
-  Loader2,
-  MapPin,
-  QrCode,
-} from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { CheckCircle2, Loader2 } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   usePublicEvent,
   useRegisterToPublicEvent,
@@ -32,16 +25,6 @@ type BaseFormState = {
   jobTitle: string;
 };
 
-function formatDate(value?: string | null) {
-  if (!value) return "—";
-
-  return new Intl.DateTimeFormat("ar-SY", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  }).format(new Date(value));
-}
-
 function getOptionLabel(option: PublicRegistrationFieldOption | string) {
   if (typeof option === "string") return option;
   return option.labelAr || option.labelEn || option.value;
@@ -62,6 +45,14 @@ export default function RegisterPage() {
   const registerMutation = useRegisterToPublicEvent(eventId);
 
   const event = eventQuery.data;
+  const formSectionRef = useRef<HTMLElement | null>(null);
+
+  const [countdown, setCountdown] = useState({
+    days: 0,
+    hours: 0,
+    minutes: 0,
+    seconds: 0,
+  });
 
   const [baseForm, setBaseForm] = useState<BaseFormState>({
     fullName: "",
@@ -78,13 +69,6 @@ export default function RegisterPage() {
     return event?.attendeeTypes ?? [];
   }, [event?.attendeeTypes]);
 
-  /**
-   * مهم:
-   * الزائر لا يختار نوع الحضور.
-   * نحن نأخذ أول نوع حضور Active من إعدادات الفعالية.
-   *
-   * لذلك لازم من الأدمن تعمل Attendee Type واحد على الأقل، مثل VISITOR.
-   */
   const defaultAttendeeType = attendeeTypes[0];
   const selectedAttendeeTypeId = defaultAttendeeType?.id || "";
 
@@ -98,6 +82,45 @@ export default function RegisterPage() {
       .filter((field) => field.isActive !== false)
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }, [event?.registrationFields, selectedAttendeeTypeId]);
+
+  useEffect(() => {
+    if (!event?.startsAt) return;
+
+    const startsAt = event.startsAt as string;
+
+    function updateCountdown() {
+      const targetTime = new Date(startsAt).getTime();
+      const now = Date.now();
+      const distance = Math.max(targetTime - now, 0);
+
+      const days = Math.floor(distance / (1000 * 60 * 60 * 24));
+      const hours = Math.floor(
+        (distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60),
+      );
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+      setCountdown({
+        days,
+        hours,
+        minutes,
+        seconds,
+      });
+    }
+
+    updateCountdown();
+
+    const timer = window.setInterval(updateCountdown, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [event?.startsAt]);
+
+  function scrollToForm() {
+    formSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
 
   function updateBaseField<Key extends keyof BaseFormState>(
     key: Key,
@@ -368,86 +391,122 @@ export default function RegisterPage() {
 
   return (
     <main className="min-h-screen bg-[#F8F8FF] text-[#4B4B4B]">
-      <header className="border-b border-black/10 bg-white">
-        <div className="mx-auto flex h-20 max-w-6xl items-center justify-between px-4 lg:px-8">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 text-sm font-extrabold text-[#4B4B4B] transition hover:text-[#A88042]"
-          >
-            <ArrowRight className="h-5 w-5" />
-            العودة للرئيسية
-          </Link>
+      {/* Hero */}
+      <section className="relative min-h-screen overflow-hidden">
+        <div
+          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+          style={{
+            backgroundImage: "url('/images/exhibition-bg.jpg')",
+          }}
+        />
 
-          <div className="text-left">
-            <p className="text-sm font-extrabold">Creative Group</p>
-            <p className="text-xs font-bold text-[#A88042]">
-              Event Registration
-            </p>
-          </div>
-        </div>
-      </header>
+        <div className="absolute inset-0 bg-black/55" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(168,128,66,0.22),transparent_32%)]" />
 
-      <section className="mx-auto grid max-w-6xl gap-8 px-4 py-10 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
-        <aside className="overflow-hidden rounded-[2rem] border border-black/10 bg-white shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
-          <div className="relative flex h-72 items-end overflow-hidden bg-[radial-gradient(circle_at_25%_20%,rgba(168,128,66,0.45),transparent_28%),linear-gradient(135deg,#0B0B0B,#242424)] p-6">
-            <div className="absolute right-4 top-4 rounded-full bg-[#A88042] px-4 py-2 text-xs font-extrabold text-white">
-              {event.type || "EVENT"}
+        <div
+          dir="ltr"
+          className="relative z-10 mx-auto grid min-h-screen max-w-7xl grid-rows-[auto_1fr_auto] px-4 py-10  lg:px-10"
+        >
+          {/* Top: logo left / title right */}
+          <div className="grid grid-cols-2 items-start">
+            <div className="flex justify-start">
+              <img
+                src="/logo.png"
+                alt="Logo"
+                className="h-14 w-auto object-contain md:h-20"
+              />
             </div>
 
-            <div>
-              <p className="text-xs font-extrabold text-[#C59B55]">
-                Creative Event
-              </p>
-
-              <h1 className="mt-2 text-3xl font-extrabold leading-[1.25] text-white">
+            <div className="flex justify-end">
+              <h1
+                dir="rtl"
+                className="w-full max-w-3xl text-right text-3xl font-extrabold leading-[1.3] text-white md:text-5xl"
+              >
                 {event.titleAr}
               </h1>
             </div>
           </div>
 
-          <div className="p-6">
-            <h1 className="text-2xl font-extrabold text-[#4B4B4B]">
-              {event.titleAr}
-            </h1>
+          <div />
 
-            {event.titleEn ? (
-              <p className="mt-1 text-sm font-bold text-[#A88042]">
-                {event.titleEn}
-              </p>
-            ) : null}
+          {/* Bottom: countdown aligned with logo / text button aligned with title */}
+          <div className="grid grid-cols-1 items-end gap-8 lg:grid-cols-2">
+            {/* Left column */}
+            <div className="flex justify-start">
+              <div className="rounded-[1.75rem] border border-white/15 bg-black/25 p-4 backdrop-blur-md">
+                <p className="mb-3 text-center text-sm font-extrabold text-[#C59B55]">
+                  يبدأ المعرض خلال
+                </p>
 
-            <p className="mt-4 text-sm font-bold leading-7 text-[#4B4B4B]/60">
-              {event.descriptionAr ||
-                event.descriptionEn ||
-                "يرجى إكمال بيانات التسجيل للحصول على QR الدخول الخاص بك."}
-            </p>
+                <div className="flex items-center gap-3 text-center">
+                  <div className="min-w-[92px] rounded-2xl border border-white/10 bg-white/10 px-4 py-3">
+                    <p className="text-3xl font-extrabold text-white">
+                      {countdown.days}
+                    </p>
+                    <p className="mt-1 text-xs font-bold text-white/65">يوم</p>
+                  </div>
 
-            <div className="mt-6 space-y-3 border-t border-black/10 pt-5">
-              <div className="flex items-center gap-2 text-sm font-bold text-[#4B4B4B]/65">
-                <CalendarDays className="h-5 w-5 text-[#A88042]" />
-                {formatDate(event.startsAt)}
-              </div>
+                  <div className="min-w-[92px] rounded-2xl border border-white/10 bg-white/10 px-4 py-3">
+                    <p className="text-3xl font-extrabold text-white">
+                      {String(countdown.hours).padStart(2, "0")}
+                    </p>
+                    <p className="mt-1 text-xs font-bold text-white/65">ساعة</p>
+                  </div>
 
-              <div className="flex items-center gap-2 text-sm font-bold text-[#4B4B4B]/65">
-                <MapPin className="h-5 w-5 text-[#A88042]" />
-                {event.client?.name || "Creative Group Event"}
+                  <div className="min-w-[92px] rounded-2xl border border-white/10 bg-white/10 px-4 py-3">
+                    <p className="text-3xl font-extrabold text-white">
+                      {String(countdown.minutes).padStart(2, "0")}
+                    </p>
+                    <p className="mt-1 text-xs font-bold text-white/65">
+                      دقيقة
+                    </p>
+                  </div>
+
+                  <div className="min-w-[92px] rounded-2xl border border-white/10 bg-white/10 px-4 py-3">
+                    <p className="text-3xl font-extrabold text-white">
+                      {String(countdown.seconds).padStart(2, "0")}
+                    </p>
+                    <p className="mt-1 text-xs font-bold text-white/65">
+                      ثانية
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="mt-6 rounded-2xl border border-[#A88042]/20 bg-[#A88042]/5 p-4">
-              <div className="flex gap-3">
-                <QrCode className="mt-1 h-5 w-5 shrink-0 text-[#A88042]" />
-
-                <p className="text-sm font-bold leading-7 text-[#4B4B4B]/65">
-                  بعد إكمال التسجيل سيتم إنشاء QR خاص بك لاستخدامه عند الدخول
-                  ونقاط المسح داخل المعرض.
+            {/* Right column */}
+            <div className="flex justify-end">
+              <div className="w-full max-w-3xl">
+                <p
+                  dir="rtl"
+                  className="mb-6 w-full text-right text-lg font-bold leading-9 text-white md:text-2xl md:leading-[2.2]"
+                >
+                  {event.descriptionAr ||
+                    event.descriptionEn ||
+                    "يرجى إكمال بيانات التسجيل للحصول على QR الدخول الخاص بك."}
                 </p>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={scrollToForm}
+                    className="flex h-14 min-w-[190px] items-center justify-center rounded-2xl bg-[#A88042] px-8 text-base font-extrabold text-white shadow-lg shadow-[#A88042]/25 transition hover:bg-[#8F6D37]"
+                  >
+                    سجل الآن
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </aside>
+        </div>
+      </section>
 
-        <section className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
+      {/* Registration Form */}
+      <section
+        ref={formSectionRef}
+        className="relative z-20 bg-[#F8F8FF] px-4 py-20 lg:px-8"
+      >
+        <div className="mx-auto max-w-5xl rounded-[2rem] border border-black/10 bg-white p-6 shadow-[0_24px_70px_rgba(0,0,0,0.12)] md:p-8">
           <div className="mb-6">
             <p className="text-sm font-extrabold text-[#A88042]">
               Registration Form
@@ -604,7 +663,7 @@ export default function RegisterPage() {
               بالضغط على إتمام التسجيل، سيتم إنشاء QR الدخول الخاص بك.
             </p>
           </form>
-        </section>
+        </div>
       </section>
     </main>
   );
