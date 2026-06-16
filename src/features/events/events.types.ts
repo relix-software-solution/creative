@@ -10,6 +10,25 @@ export type EventStatus =
   | "ARCHIVED"
   | string;
 
+export type EventBrandingTheme = {
+  primary?: string | null;
+  primaryHover?: string | null;
+  background?: string | null;
+  text?: string | null;
+  radius?: string | null;
+};
+
+export type EventBranding = {
+  id?: string;
+  eventId: string;
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
+  theme?: EventBrandingTheme | null;
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type EventItem = {
   id: string;
   clientId: string;
@@ -29,10 +48,14 @@ export type EventItem = {
   isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
+
   client?: {
     id: string;
     name: string;
   } | null;
+
+  branding?: EventBranding | null;
+  eventBranding?: EventBranding | null;
 };
 
 export type EventsListParams = {
@@ -42,7 +65,7 @@ export type EventsListParams = {
   clientId?: string;
 };
 
-export type CreateEventPayload = {
+export type EventBasePayload = {
   clientId: string;
   type: EventType;
   titleAr: string;
@@ -58,7 +81,21 @@ export type CreateEventPayload = {
   qrValidUntil?: string;
 };
 
-export type UpdateEventPayload = Partial<CreateEventPayload>;
+export type EventBrandingPayload = {
+  theme?: EventBrandingTheme;
+  logo?: File | null;
+  backgroundImage?: File | null;
+};
+
+export type CreateEventPayload = {
+  event: EventBasePayload;
+  branding?: EventBrandingPayload;
+};
+
+export type UpdateEventPayload = {
+  event: Partial<EventBasePayload>;
+  branding?: EventBrandingPayload;
+};
 
 export type EventsListResponse = {
   items: EventItem[];
@@ -66,4 +103,9 @@ export type EventsListResponse = {
   page?: number;
   limit?: number;
   totalPages?: number;
+};
+
+export type EventMutationResponse = {
+  event: EventItem;
+  branding?: EventBranding;
 };

@@ -5,6 +5,13 @@ function isValidDate(value: string) {
   return !Number.isNaN(date.getTime());
 }
 
+const hexColorSchema = z
+  .string()
+  .trim()
+  .regex(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/, "صيغة اللون غير صحيحة")
+  .optional()
+  .or(z.literal(""));
+
 export const eventSchema = z
   .object({
     clientId: z.string().min(1, "العميل مطلوب"),
@@ -42,6 +49,16 @@ export const eventSchema = z
     qrValidFrom: z.string().optional().or(z.literal("")),
 
     qrValidUntil: z.string().optional().or(z.literal("")),
+
+    themePrimary: hexColorSchema,
+
+    themePrimaryHover: hexColorSchema,
+
+    themeBackground: hexColorSchema,
+
+    themeText: hexColorSchema,
+
+    themeRadius: z.string().trim().optional().or(z.literal("")),
   })
   .refine((values) => new Date(values.endsAt) > new Date(values.startsAt), {
     message: "تاريخ النهاية يجب أن يكون بعد تاريخ البداية",

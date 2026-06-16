@@ -46,6 +46,8 @@ function readQrImageUrl(value: unknown): string {
 export function normalizePublicRegistrationSuccess(
   eventId: string,
   response: PublicRegisterResponse,
+  fallbackCustomFields: Record<string, unknown> = {},
+  fallbackAttendeeTypeId = "",
 ): PublicRegistrationSuccessData {
   const registrationId =
     firstString(
@@ -67,13 +69,6 @@ export function normalizePublicRegistrationSuccess(
   const email =
     firstString(response.registration?.email, response.email) ?? null;
 
-  const companyName =
-    firstString(response.registration?.companyName, response.companyName) ??
-    null;
-
-  const jobTitle =
-    firstString(response.registration?.jobTitle, response.jobTitle) ?? null;
-
   const qrToken =
     firstString(
       readQrToken(response.qrToken),
@@ -89,6 +84,22 @@ export function normalizePublicRegistrationSuccess(
       response.qrImageUrl,
       response.imageUrl,
       response.publicUrl,
+      response.qr?.qrImageUrl,
+      response.qr?.imageUrl,
+      response.qr?.publicUrl,
+    ) ?? "";
+
+  const customFields =
+    response.registration?.customFields ||
+    response.customFields ||
+    fallbackCustomFields ||
+    {};
+
+  const attendeeTypeId =
+    firstString(
+      response.registration?.attendeeTypeId,
+      response.attendeeTypeId,
+      fallbackAttendeeTypeId,
     ) ?? "";
 
   return {
@@ -98,8 +109,8 @@ export function normalizePublicRegistrationSuccess(
     fullName,
     phone,
     email,
-    companyName,
-    jobTitle,
+    attendeeTypeId,
+    customFields,
     status: response.registration?.status ?? response.status,
     qrToken,
     qrImageUrl,

@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { createEvent, deleteEvent, getEvents, updateEvent } from "./events.api";
+import {
+  createEvent,
+  deleteEvent,
+  getEventBranding,
+  getEvents,
+  updateEvent,
+} from "./events.api";
 import {
   CreateEventPayload,
   EventsListParams,
@@ -12,6 +18,8 @@ export const eventsKeys = {
   all: ["events"] as const,
   lists: () => [...eventsKeys.all, "list"] as const,
   list: (params: EventsListParams) => [...eventsKeys.lists(), params] as const,
+  branding: (eventId: string) =>
+    [...eventsKeys.all, "branding", eventId] as const,
 };
 
 function getErrorMessage(error: unknown) {
@@ -44,6 +52,12 @@ function getErrorMessage(error: unknown) {
   return "حدث خطأ غير متوقع";
 }
 
+function invalidateEvents(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({
+    queryKey: eventsKeys.all,
+  });
+}
+
 export function useEvents(params: EventsListParams) {
   return useQuery({
     queryKey: eventsKeys.list(params),
@@ -60,10 +74,7 @@ export function useCreateEvent() {
 
     onSuccess: () => {
       toast.success("تم إنشاء الفعالية بنجاح");
-
-      queryClient.invalidateQueries({
-        queryKey: eventsKeys.lists(),
-      });
+      invalidateEvents(queryClient);
     },
 
     onError: (error) => {
@@ -86,10 +97,7 @@ export function useUpdateEvent() {
 
     onSuccess: () => {
       toast.success("تم تعديل الفعالية بنجاح");
-
-      queryClient.invalidateQueries({
-        queryKey: eventsKeys.lists(),
-      });
+      invalidateEvents(queryClient);
     },
 
     onError: (error) => {
@@ -128,13 +136,20 @@ export function useDeleteEvent() {
         },
       );
 
-      queryClient.invalidateQueries({
-        queryKey: eventsKeys.lists(),
-      });
+      invalidateEvents(queryClient);
     },
 
     onError: (error) => {
       toast.error(getErrorMessage(error));
     },
+  });
+}
+
+export function useEventBranding(eventId: string) {
+  return useQuery({
+    queryKey: eventsKeys.branding(eventId),
+    queryFn: () => getEventBranding(eventId),
+    enabled: Boolean(eventId),
+    retry: false,
   });
 }
