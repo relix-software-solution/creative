@@ -14,6 +14,8 @@ export type QrRegistration = {
   email?: string | null;
   companyName?: string | null;
   jobTitle?: string | null;
+  customFields?: Record<string, unknown> | null;
+  externalId?: string | null;
   status?: string;
   eventId?: string;
   attendeeTypeId?: string;

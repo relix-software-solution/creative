@@ -52,6 +52,8 @@ import {
   useUpdateRegistration,
 } from "@/features/registrations/registrations.queries";
 import { Registration } from "@/features/registrations/registrations.types";
+import { usePublicEvent } from "@/features/public-events/public-events.queries";
+import { PublicRegistrationField } from "@/features/public-events/public-events.types";
 
 type PendingAction =
   | "create"
@@ -109,20 +111,64 @@ function parseCustomFields(value?: string) {
   return JSON.parse(value) as Record<string, unknown>;
 }
 
-function normalizePayload(values: RegistrationFormValues) {
+function normalizePayload(
+  values: RegistrationFormValues,
+  fields: PublicRegistrationField[],
+  customValues: Record<string, unknown>,
+) {
   return {
     eventId: values.eventId,
     attendeeTypeId: values.attendeeTypeId,
     fullName: values.fullName.trim(),
     phone: values.phone?.trim() || undefined,
     email: values.email?.trim() || undefined,
-    companyName: values.companyName?.trim() || undefined,
-    jobTitle: values.jobTitle?.trim() || undefined,
     externalId: values.externalId?.trim() || undefined,
-    customFields: parseCustomFields(values.customFieldsJson),
+    customFields: normalizeCustomFieldsForSubmit(fields, customValues),
     notes: values.notes?.trim() || undefined,
     source: "ADMIN" as const,
   };
+}
+
+function formatCustomFieldValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "نعم" : "لا";
+  if (Array.isArray(value)) return value.map(String).join("، ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function getVisibleRegistrationFields(
+  fields: PublicRegistrationField[] | undefined,
+  attendeeTypeId?: string,
+) {
+  return (fields ?? [])
+    .filter((field) => field.isActive !== false)
+    .filter(
+      (field) => !attendeeTypeId || field.attendeeTypeId === attendeeTypeId,
+    )
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function getEmptyValueForField(field: PublicRegistrationField) {
+  if (field.type === "CHECKBOX") return false;
+  return "";
+}
+
+function normalizeCustomFieldsForSubmit(
+  fields: PublicRegistrationField[],
+  values: Record<string, unknown>,
+) {
+  const result: Record<string, unknown> = {};
+
+  fields.forEach((field) => {
+    const value = values[field.key];
+
+    if (value === undefined || value === null || value === "") return;
+
+    result[field.key] = value;
+  });
+
+  return result;
 }
 
 export default function RegistrationsPage() {
@@ -139,6 +185,8 @@ export default function RegistrationsPage() {
 
   const [selectedRegistration, setSelectedRegistration] =
     useState<Registration | null>(null);
+
+  const [customFields, setCustomFields] = useState<Record<string, unknown>>({});
 
   const [pendingValues, setPendingValues] =
     useState<RegistrationFormValues | null>(null);
@@ -195,6 +243,17 @@ export default function RegistrationsPage() {
 
   const selectedFormEventId = form.watch("eventId");
 
+  const selectedFormAttendeeTypeId = form.watch("attendeeTypeId");
+
+  const publicEventQuery = usePublicEvent(selectedFormEventId);
+
+  const formRegistrationFields = useMemo(() => {
+    return getVisibleRegistrationFields(
+      publicEventQuery.data?.registrationFields,
+      selectedFormAttendeeTypeId,
+    );
+  }, [publicEventQuery.data?.registrationFields, selectedFormAttendeeTypeId]);
+
   const formAttendeeTypesQuery = useAttendeeTypes({
     page: 1,
     limit: 100,
@@ -227,6 +286,7 @@ export default function RegistrationsPage() {
     setSelectedRegistration(null);
     setPendingAction(null);
     setPendingValues(null);
+    setCustomFields({});
 
     form.reset({
       eventId: eventFilter || "",
@@ -248,6 +308,7 @@ export default function RegistrationsPage() {
     setSelectedRegistration(registration);
     setPendingAction(null);
     setPendingValues(null);
+    setCustomFields(registration.customFields ?? {});
 
     form.reset({
       eventId: registration.eventId,
@@ -377,7 +438,11 @@ export default function RegistrationsPage() {
 
     if (!pendingValues) return;
 
-    const payload = normalizePayload(pendingValues);
+    const payload = normalizePayload(
+      pendingValues,
+      formRegistrationFields,
+      customFields,
+    );
 
     if (pendingAction === "update" && selectedRegistration) {
       updateRegistrationMutation.mutate(
@@ -684,7 +749,7 @@ export default function RegistrationsPage() {
                       <TableHead className="w-[16%]">الفعالية</TableHead>
                       <TableHead className="w-[13%]">نوع الحضور</TableHead>
                       <TableHead className="w-[17%]">التواصل</TableHead>
-                      <TableHead className="w-[13%]">الشركة</TableHead>
+                      <TableHead className="w-[13%]">حقول إضافية</TableHead>
                       <TableHead className="w-[9%]">الحالة</TableHead>
                       <TableHead className="w-[14%] text-center">
                         الإجراءات
@@ -737,14 +802,30 @@ export default function RegistrationsPage() {
                         </TableCell>
 
                         <TableCell className="align-top">
-                          <div className="min-w-0">
-                            <p className="truncate">
-                              {registration.companyName || "—"}
-                            </p>
-
-                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
-                              {registration.jobTitle || "—"}
-                            </p>
+                          <div className="min-w-0 space-y-1">
+                            {registration.customFields &&
+                            Object.keys(registration.customFields).length >
+                              0 ? (
+                              Object.entries(registration.customFields)
+                                .slice(0, 2)
+                                .map(([key, value]) => (
+                                  <p
+                                    key={key}
+                                    className="truncate text-xs font-bold"
+                                  >
+                                    <span className="text-[#4B4B4B]/45">
+                                      {key}:{" "}
+                                    </span>
+                                    <span className="text-[#4B4B4B]">
+                                      {formatCustomFieldValue(value)}
+                                    </span>
+                                  </p>
+                                ))
+                            ) : (
+                              <p className="text-sm font-bold text-[#4B4B4B]/40">
+                                —
+                              </p>
+                            )}
                           </div>
                         </TableCell>
 
@@ -952,6 +1033,8 @@ export default function RegistrationsPage() {
                 shouldDirty: true,
                 shouldValidate: true,
               });
+
+              setCustomFields({});
             }}
             options={formAttendeeTypes.map((type) => ({
               label: type.nameAr,
@@ -983,29 +1066,156 @@ export default function RegistrationsPage() {
             {...form.register("email")}
           />
 
-          <Input
-            label="الشركة"
-            placeholder="Example Co"
-            error={form.formState.errors.companyName?.message}
-            disabled={isSubmitting}
-            {...form.register("companyName")}
-          />
+          {formRegistrationFields.length > 0 ? (
+            <div className="space-y-4 rounded-3xl border border-black/10 bg-[#F8F8FF] p-4 lg:col-span-2">
+              <div>
+                <p className="text-base font-extrabold text-[#4B4B4B]">
+                  الحقول الإضافية
+                </p>
 
-          <Input
-            label="المسمى الوظيفي"
-            placeholder="Manager"
-            error={form.formState.errors.jobTitle?.message}
-            disabled={isSubmitting}
-            {...form.register("jobTitle")}
-          />
+                <p className="mt-1 text-xs font-bold text-[#4B4B4B]/50">
+                  هذه الحقول تأتي من إعدادات نوع الحضور المختار.
+                </p>
+              </div>
 
-          <Input
-            label="External ID"
-            placeholder="REG-001"
-            error={form.formState.errors.externalId?.message}
-            disabled={isSubmitting}
-            {...form.register("externalId")}
-          />
+              <div className="grid gap-4 lg:grid-cols-2">
+                {formRegistrationFields.map((field) => {
+                  const value = customFields[field.key];
+
+                  if (field.type === "TEXTAREA") {
+                    return (
+                      <div key={field.id} className="space-y-2 lg:col-span-2">
+                        <label className="text-sm font-bold text-[#4B4B4B]">
+                          {field.labelAr || field.labelEn || field.key}
+                          {field.isRequired ? (
+                            <span className="mr-1 text-red-500">*</span>
+                          ) : null}
+                        </label>
+
+                        <textarea
+                          rows={3}
+                          value={String(value ?? "")}
+                          disabled={isSubmitting}
+                          placeholder={
+                            field.placeholderAr || field.placeholderEn || ""
+                          }
+                          onChange={(event) => {
+                            setCustomFields((current) => ({
+                              ...current,
+                              [field.key]: event.target.value,
+                            }));
+                          }}
+                          className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
+                        />
+                      </div>
+                    );
+                  }
+
+                  if (field.type === "SELECT") {
+                    const options = Array.isArray(field.options)
+                      ? field.options
+                      : [];
+
+                    return (
+                      <Select
+                        key={field.id}
+                        label={`${field.labelAr || field.labelEn || field.key}${
+                          field.isRequired ? " *" : ""
+                        }`}
+                        value={String(value ?? "")}
+                        placeholder={
+                          field.placeholderAr || field.placeholderEn || "اختر"
+                        }
+                        disabled={isSubmitting}
+                        onChange={(nextValue) => {
+                          setCustomFields((current) => ({
+                            ...current,
+                            [field.key]: nextValue,
+                          }));
+                        }}
+                        options={options.map((option) => {
+                          if (typeof option === "string") {
+                            return {
+                              label: option,
+                              value: option,
+                            };
+                          }
+
+                          return {
+                            label:
+                              option.labelAr || option.labelEn || option.value,
+                            value: option.value,
+                          };
+                        })}
+                      />
+                    );
+                  }
+
+                  if (field.type === "CHECKBOX") {
+                    return (
+                      <label
+                        key={field.id}
+                        className="flex min-h-12 items-center gap-3 rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B]"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(value)}
+                          disabled={isSubmitting}
+                          onChange={(event) => {
+                            setCustomFields((current) => ({
+                              ...current,
+                              [field.key]: event.target.checked,
+                            }));
+                          }}
+                        />
+
+                        <span>
+                          {field.labelAr || field.labelEn || field.key}
+                          {field.isRequired ? (
+                            <span className="mr-1 text-red-500">*</span>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  }
+
+                  return (
+                    <Input
+                      key={field.id}
+                      label={`${field.labelAr || field.labelEn || field.key}${
+                        field.isRequired ? " *" : ""
+                      }`}
+                      type={
+                        field.type === "EMAIL"
+                          ? "email"
+                          : field.type === "PHONE"
+                            ? "tel"
+                            : field.type === "NUMBER"
+                              ? "number"
+                              : field.type === "DATE"
+                                ? "date"
+                                : "text"
+                      }
+                      value={String(value ?? "")}
+                      placeholder={
+                        field.placeholderAr || field.placeholderEn || ""
+                      }
+                      disabled={isSubmitting}
+                      onChange={(event) => {
+                        setCustomFields((current) => ({
+                          ...current,
+                          [field.key]:
+                            field.type === "NUMBER"
+                              ? event.target.value
+                              : event.target.value,
+                        }));
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <div className="space-y-2 lg:col-span-2">
             <label className="text-sm font-bold text-[#4B4B4B]">ملاحظات</label>

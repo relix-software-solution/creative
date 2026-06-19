@@ -1086,6 +1086,42 @@ export default function EventsPage() {
           </section>
 
           <section className="rounded-[1.5rem] border border-black/10 bg-white p-4">
+            <h3 className="mb-3 text-lg font-extrabold text-[#4B4B4B]">
+              الوصف
+            </h3>
+
+            <div className="grid gap-3">
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-[#4B4B4B]">
+                  الوصف العربي
+                </label>
+
+                <textarea
+                  {...form.register("descriptionAr")}
+                  rows={2}
+                  disabled={isSubmitting}
+                  className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
+                  placeholder="أدخل وصف الفعالية بالعربي..."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-[#4B4B4B]">
+                  الوصف الإنجليزي
+                </label>
+
+                <textarea
+                  {...form.register("descriptionEn")}
+                  rows={2}
+                  disabled={isSubmitting}
+                  className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
+                  placeholder="Enter event description in English..."
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[1.5rem] border border-black/10 bg-white p-4">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-lg font-extrabold text-[#4B4B4B]">
@@ -1190,42 +1226,6 @@ export default function EventsPage() {
                 }}
               >
                 معاينة الزر
-              </div>
-            </div>
-          </section>
-
-          <section className="rounded-[1.5rem] border border-black/10 bg-white p-4">
-            <h3 className="mb-3 text-lg font-extrabold text-[#4B4B4B]">
-              الوصف
-            </h3>
-
-            <div className="grid gap-3">
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-[#4B4B4B]">
-                  الوصف العربي
-                </label>
-
-                <textarea
-                  {...form.register("descriptionAr")}
-                  rows={2}
-                  disabled={isSubmitting}
-                  className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
-                  placeholder="أدخل وصف الفعالية بالعربي..."
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-[#4B4B4B]">
-                  الوصف الإنجليزي
-                </label>
-
-                <textarea
-                  {...form.register("descriptionEn")}
-                  rows={2}
-                  disabled={isSubmitting}
-                  className="w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold text-[#4B4B4B] outline-none transition placeholder:text-[#4B4B4B]/40 focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10 disabled:cursor-not-allowed disabled:bg-black/5"
-                  placeholder="Enter event description in English..."
-                />
               </div>
             </div>
           </section>

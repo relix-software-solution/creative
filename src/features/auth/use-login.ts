@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { getDefaultPathByRole } from "@/lib/auth/roles";
 import { useAuthStore } from "@/stores/auth-store";
@@ -43,7 +43,6 @@ function isSafeNextUrl(nextUrl: string | null) {
 
 export function useLogin() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const setAuth = useAuthStore((state) => state.setAuth);
   const setUser = useAuthStore((state) => state.setUser);
@@ -70,7 +69,7 @@ export function useLogin() {
     },
 
     onSuccess: (user) => {
-      const nextUrl = searchParams.get("next");
+      const nextUrl = new URLSearchParams(window.location.search).get("next");
       const fallbackUrl = getDefaultPathByRole(user.role);
 
       toast.success("تم تسجيل الدخول بنجاح");

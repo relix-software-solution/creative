@@ -32,7 +32,11 @@ export default function StaffSyncPage() {
   }
 
   useEffect(() => {
-    loadQueue();
+    const timeout = window.setTimeout(() => {
+      loadQueue();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
   }, []);
 
   return (

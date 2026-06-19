@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   UserRound,
 } from "lucide-react";
-import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useMemo, useRef, useState } from "react";
 import { usePublicEvent } from "@/features/public-events/public-events.queries";
 import { getPublicRegistrationStorageKey } from "@/features/public-events/public-registration-result";
 import {
@@ -131,6 +131,22 @@ function getQrImageUrl(value?: string | null) {
   return resolveAssetUrl(value);
 }
 
+function getStoredSuccessData(eventId: string) {
+  if (typeof sessionStorage === "undefined") {
+    return null;
+  }
+
+  const raw = sessionStorage.getItem(getPublicRegistrationStorageKey(eventId));
+
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw) as PublicRegistrationSuccessData;
+  } catch {
+    return null;
+  }
+}
+
 function formatCustomFieldValue(value: unknown) {
   if (value === undefined || value === null || value === "") return "—";
 
@@ -180,26 +196,12 @@ export default function PublicRegistrationSuccessPage() {
   const logoUrl = useMemo(() => getLogoUrl(eventData), [eventData]);
   const backgroundUrl = useMemo(() => getBackgroundUrl(eventData), [eventData]);
 
-  const [successData, setSuccessData] =
-    useState<PublicRegistrationSuccessData | null>(null);
+  const [successData] = useState<PublicRegistrationSuccessData | null>(() =>
+    getStoredSuccessData(eventId),
+  );
 
   const [primaryHover, setPrimaryHover] = useState(false);
   const [secondaryHover, setSecondaryHover] = useState(false);
-
-  useEffect(() => {
-    const raw = sessionStorage.getItem(
-      getPublicRegistrationStorageKey(eventId),
-    );
-
-    if (!raw) return;
-
-    try {
-      const parsed = JSON.parse(raw) as PublicRegistrationSuccessData;
-      setSuccessData(parsed);
-    } catch {
-      setSuccessData(null);
-    }
-  }, [eventId]);
 
   const qrImageUrl = useMemo(
     () => getQrImageUrl(successData?.qrImageUrl),

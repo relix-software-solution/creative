@@ -46,6 +46,7 @@ export function useStaffAssignments(params: StaffAssignmentsListParams = {}) {
   return useQuery({
     queryKey: staffKeys.assignmentsList(params),
     queryFn: () => getStaffAssignments(params),
+    placeholderData: (previousData) => previousData,
   });
 }
 

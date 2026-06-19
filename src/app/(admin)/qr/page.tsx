@@ -264,7 +264,7 @@ export default function QrAdminPage() {
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
   const [latestQrResult, setLatestQrResult] = useState<QrResponse | null>(null);
-  const [imageBroken, setImageBroken] = useState(false);
+  const [brokenImageUrl, setBrokenImageUrl] = useState<string | null>(null);
 
   const qrContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -303,6 +303,9 @@ export default function QrAdminPage() {
   const currentQrValidUntil = getQrValidUntil(currentQr);
 
   const hasQr = Boolean(currentQrToken);
+  const imageBroken = Boolean(
+    currentQrImageUrl && brokenImageUrl === currentQrImageUrl,
+  );
   const hasQrImage = Boolean(currentQrImageUrl) && !imageBroken;
   const isQrLoading = qrQuery.isLoading && !latestQrResult;
 
@@ -314,21 +317,21 @@ export default function QrAdminPage() {
   const isFiltering = Boolean(search || eventFilter);
 
   useEffect(() => {
-    setImageBroken(false);
-  }, [currentQrImageUrl]);
-
-  useEffect(() => {
     if (!registrationsQuery.isSuccess) return;
 
     if (registrations.length === 0 && page > 1) {
-      setPage((value) => Math.max(1, value - 1));
+      const timeout = window.setTimeout(() => {
+        setPage((value) => Math.max(1, value - 1));
+      }, 0);
+
+      return () => window.clearTimeout(timeout);
     }
   }, [registrations.length, registrationsQuery.isSuccess, page]);
 
   function openDetails(registration: QrRegistration) {
     setSelectedRegistration(registration);
     setLatestQrResult(null);
-    setImageBroken(false);
+    setBrokenImageUrl(null);
     setDetailsOpen(true);
   }
 
@@ -338,14 +341,14 @@ export default function QrAdminPage() {
     setDetailsOpen(false);
     setSelectedRegistration(null);
     setLatestQrResult(null);
-    setImageBroken(false);
+    setBrokenImageUrl(null);
   }
 
   function requestAction(action: PendingAction, registration?: QrRegistration) {
     if (registration) {
       setSelectedRegistration(registration);
       setLatestQrResult(null);
-      setImageBroken(false);
+      setBrokenImageUrl(null);
       setDetailsOpen(true);
     }
 
@@ -367,7 +370,7 @@ export default function QrAdminPage() {
       generateQrMutation.mutate(selectedRegistration.id, {
         onSuccess: (data) => {
           setLatestQrResult(data);
-          setImageBroken(false);
+          setBrokenImageUrl(null);
           setDetailsOpen(true);
           closeConfirm();
         },
@@ -382,7 +385,7 @@ export default function QrAdminPage() {
           setLatestQrResult((previous) =>
             mergeQrResponse(previous || qrQuery.data || null, data),
           );
-          setImageBroken(false);
+          setBrokenImageUrl(null);
           setDetailsOpen(true);
           closeConfirm();
         },
@@ -395,7 +398,7 @@ export default function QrAdminPage() {
       revokeQrMutation.mutate(selectedRegistration.id, {
         onSuccess: (data) => {
           setLatestQrResult(data);
-          setImageBroken(false);
+          setBrokenImageUrl(null);
           setDetailsOpen(true);
           closeConfirm();
         },
@@ -926,7 +929,7 @@ export default function QrAdminPage() {
                     <img
                       src={currentQrImageUrl}
                       alt="QR Code"
-                      onError={() => setImageBroken(true)}
+                      onError={() => setBrokenImageUrl(currentQrImageUrl)}
                       className="h-60 w-60 rounded-2xl object-contain"
                     />
                   ) : currentQrToken ? (

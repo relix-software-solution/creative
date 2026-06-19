@@ -25,8 +25,8 @@ import { Select } from "@/components/ui/select";
 import { useCheckpoints } from "@/features/checkpoints/checkpoints.queries";
 import {
   useStaffAssignments,
-  useStartStaffSession,
 } from "@/features/staff/staff.queries";
+import { useStartStaffSession } from "@/features/staff-ops/staff-ops.queries";
 import { StaffAssignment } from "@/features/staff/staff.types";
 import { useAuthStore } from "@/stores/auth-store";
 import { useDeviceStore } from "@/stores/device-store";
@@ -69,7 +69,10 @@ export default function StaffSetupPage() {
   const assignmentsQuery = useStaffAssignments({ page: 1, limit: 50 });
   const startSessionMutation = useStartStaffSession();
 
-  const assignments = assignmentsQuery.data?.items ?? [];
+  const assignments = useMemo(
+    () => assignmentsQuery.data?.items ?? [],
+    [assignmentsQuery.data?.items],
+  );
 
   const selectedAssignment = useMemo(() => {
     if (assignmentId) {

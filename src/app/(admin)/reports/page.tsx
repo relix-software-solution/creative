@@ -165,7 +165,11 @@ export default function ReportsPage() {
   useEffect(() => {
     if (eventId || events.length === 0) return;
 
-    setEventId(events[0].id);
+    const timeout = window.setTimeout(() => {
+      setEventId(events[0].id);
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
   }, [eventId, events]);
 
   const dateParams = useMemo(

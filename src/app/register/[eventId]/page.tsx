@@ -129,6 +129,37 @@ function getFocusStyle(theme: ReturnType<typeof getTheme>): CSSProperties {
   };
 }
 
+function BilingualLabel({
+  ar,
+  en,
+  required,
+  color,
+}: {
+  ar: string;
+  en?: string | null;
+  required?: boolean;
+  color: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <label className="text-sm font-extrabold" style={{ color }}>
+        {ar}
+        {required ? <span className="text-red-600"> *</span> : null}
+      </label>
+
+      {en ? (
+        <span
+          dir="ltr"
+          className="text-left text-xs font-extrabold uppercase tracking-wide opacity-45"
+          style={{ color }}
+        >
+          {en}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export default function RegisterPage() {
   const params = useParams<{ eventId: string }>();
   const eventId = params.eventId;
@@ -362,10 +393,12 @@ export default function RegisterPage() {
     const value = customFields[field.key];
 
     const commonLabel = (
-      <label className="text-sm font-extrabold" style={{ color: theme.text }}>
-        {field.labelAr}
-        {field.isRequired ? <span className="text-red-600"> *</span> : null}
-      </label>
+      <BilingualLabel
+        ar={field.labelAr || field.key}
+        en={field.labelEn}
+        required={field.isRequired}
+        color={theme.text}
+      />
     );
 
     const inputClass =
@@ -450,10 +483,21 @@ export default function RegisterPage() {
               }}
             />
 
-            <span className="text-sm font-extrabold">
-              {field.labelAr}
-              {field.isRequired ? (
-                <span className="text-red-600"> *</span>
+            <span className="flex flex-1 items-center justify-between gap-3 text-sm font-extrabold">
+              <span>
+                {field.labelAr || field.key}
+                {field.isRequired ? (
+                  <span className="text-red-600"> *</span>
+                ) : null}
+              </span>
+
+              {field.labelEn ? (
+                <span
+                  dir="ltr"
+                  className="text-left text-xs font-extrabold uppercase tracking-wide opacity-45"
+                >
+                  {field.labelEn}
+                </span>
               ) : null}
             </span>
           </label>
@@ -691,6 +735,7 @@ export default function RegisterPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <BaseInput
                 label="الاسم الكامل"
+                labelEn="Full Name"
                 required
                 value={baseForm.fullName}
                 placeholder="مثال: محمد أحمد"
@@ -701,6 +746,7 @@ export default function RegisterPage() {
 
               <BaseInput
                 label="رقم الهاتف"
+                labelEn="Phone Number"
                 required
                 value={baseForm.phone}
                 placeholder="+963944123456"
@@ -715,6 +761,7 @@ export default function RegisterPage() {
             <div className="grid gap-4">
               <BaseInput
                 label="البريد الإلكتروني"
+                labelEn="Email Address"
                 required
                 value={baseForm.email}
                 placeholder="name@example.com"
@@ -729,12 +776,22 @@ export default function RegisterPage() {
             {visibleFields.length > 0 ? (
               <div className="grid gap-4 border-t border-black/10 pt-5 md:grid-cols-2">
                 <div className="md:col-span-2">
-                  <p
-                    className="text-sm font-extrabold"
-                    style={{ color: theme.primary }}
-                  >
-                    بيانات إضافية
-                  </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <p
+                      className="text-sm font-extrabold"
+                      style={{ color: theme.primary }}
+                    >
+                      بيانات إضافية
+                    </p>
+
+                    <span
+                      dir="ltr"
+                      className="text-xs font-extrabold uppercase tracking-wide opacity-60"
+                      style={{ color: theme.primary }}
+                    >
+                      Additional Information
+                    </span>
+                  </div>
                 </div>
 
                 {visibleFields.map((field) => renderField(field))}
@@ -793,6 +850,7 @@ function CountdownBox({
 
 function BaseInput({
   label,
+  labelEn,
   value,
   placeholder,
   error,
@@ -804,6 +862,7 @@ function BaseInput({
   inputMode,
 }: {
   label: string;
+  labelEn?: string;
   value: string;
   placeholder?: string;
   error?: string;
@@ -816,10 +875,12 @@ function BaseInput({
 }) {
   return (
     <div className="space-y-2">
-      <label className="text-sm font-extrabold" style={{ color: theme.text }}>
-        {label}
-        {required ? <span className="text-red-600"> *</span> : null}
-      </label>
+      <BilingualLabel
+        ar={label}
+        en={labelEn}
+        required={required}
+        color={theme.text}
+      />
 
       <input
         type={type}

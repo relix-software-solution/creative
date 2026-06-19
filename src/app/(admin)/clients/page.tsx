@@ -117,7 +117,11 @@ export default function ClientsPage() {
     if (!clientsQuery.isSuccess) return;
 
     if (clients.length === 0 && page > 1) {
-      setPage((value) => Math.max(1, value - 1));
+      const timeout = window.setTimeout(() => {
+        setPage((value) => Math.max(1, value - 1));
+      }, 0);
+
+      return () => window.clearTimeout(timeout);
     }
   }, [clients.length, clientsQuery.isSuccess, page]);
 

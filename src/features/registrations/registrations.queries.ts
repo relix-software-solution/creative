@@ -109,10 +109,14 @@ function invalidateRegistrations(
   });
 }
 
-export function useRegistrations(params: RegistrationsListParams) {
+export function useRegistrations(
+  params: RegistrationsListParams,
+  enabled = true,
+) {
   return useQuery({
     queryKey: registrationsKeys.list(params),
     queryFn: () => getRegistrations(params),
+    enabled,
     placeholderData: (previousData) => previousData,
   });
 }

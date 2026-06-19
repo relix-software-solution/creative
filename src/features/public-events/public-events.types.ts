@@ -158,6 +158,12 @@ export type PublicEventBranding = {
 export type PublicEvent = {
   id: string;
   clientId?: string;
+  client?: {
+    id?: string;
+    name?: string | null;
+    nameAr?: string | null;
+    nameEn?: string | null;
+  } | null;
   type?: string;
   titleAr: string;
   titleEn?: string | null;

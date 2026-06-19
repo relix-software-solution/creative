@@ -53,7 +53,11 @@ export function Select({
   const selectedOption = options.find((option) => option.value === value);
 
   useEffect(() => {
-    setMounted(true);
+    const frame = window.requestAnimationFrame(() => {
+      setMounted(true);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   function updatePosition() {

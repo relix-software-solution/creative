@@ -8,9 +8,20 @@ export type RegistrationStatus =
 
 export type RegistrationSource = "ADMIN" | "PUBLIC" | "IMPORT" | string;
 
+export type RegistrationQrObject = {
+  qrToken?: string | null;
+  token?: string | null;
+  value?: string | null;
+  signedToken?: string | null;
+  imageUrl?: string | null;
+  publicUrl?: string | null;
+  qrImageUrl?: string | null;
+};
+
 export type Registration = {
   id: string;
   eventId: string;
+  publicId: string | null;
   attendeeTypeId: string;
 
   fullName: string;
@@ -33,6 +44,12 @@ export type Registration = {
 
   createdAt?: string;
   updatedAt?: string;
+
+  qrToken?: string | RegistrationQrObject | null;
+  qr?: RegistrationQrObject | null;
+  qrImageUrl?: string | null;
+  imageUrl?: string | null;
+  publicUrl?: string | null;
 
   event?: {
     id: string;
