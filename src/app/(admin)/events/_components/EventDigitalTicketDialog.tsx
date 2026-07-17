@@ -12,15 +12,7 @@ import {
   TicketCheck,
   Trash2,
 } from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
-import {
-  CSSProperties,
-  ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -354,23 +346,6 @@ export function EventDigitalTicketDialog({
 
   const eventName =
     event?.titleAr?.trim() || event?.titleEn?.trim() || "الفعالية";
-
-  const logoUrl = useMemo(
-    () => resolveAssetUrl(branding?.logoUrl),
-    [branding?.logoUrl],
-  );
-
-  const previewDate = useMemo(
-    () =>
-      formatPreviewDateRange(event?.startsAt, event?.endsAt, event?.timezone),
-    [event?.startsAt, event?.endsAt, event?.timezone],
-  );
-
-  const previewTime = useMemo(
-    () =>
-      formatPreviewTimeRange(event?.startsAt, event?.endsAt, event?.timezone),
-    [event?.startsAt, event?.endsAt, event?.timezone],
-  );
 
   const theme = useMemo<ExtendedDigitalTicketTheme>(
     () => ({
@@ -719,10 +694,10 @@ export function EventDigitalTicketDialog({
       ) : (
         <div
           dir="rtl"
-          className="grid max-h-[76vh] min-h-[620px] overflow-y-auto rounded-3xl border border-black/10 bg-white lg:grid-cols-[minmax(0,1fr)_400px] lg:overflow-hidden"
+          className="min-h-0 overflow-hidden rounded-3xl border border-black/10 bg-white"
         >
-          <section className="min-w-0 p-4 sm:p-6 xl:overflow-y-auto">
-            <div className="space-y-5">
+          <section className="max-h-[calc(100dvh-220px)] min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-6">
+            <div className="mx-auto max-w-3xl space-y-5">
               <div className="rounded-3xl border border-blue-200 bg-blue-50 p-5">
                 <div className="flex items-start gap-3">
                   <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-blue-700" />
@@ -755,7 +730,7 @@ export function EventDigitalTicketDialog({
 
               <EditorSection
                 title="ألوان البطاقة"
-                description="تظهر التغييرات مباشرة في المعاينة."
+                description="تستخدم هذه الألوان عند إنشاء بطاقة الدخول."
                 icon={<Palette className="h-5 w-5" />}
                 action={
                   <Button

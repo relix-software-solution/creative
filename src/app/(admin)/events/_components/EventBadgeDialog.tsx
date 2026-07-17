@@ -79,15 +79,10 @@ export function EventBadgeDialog({
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl text-[#4B4B4B] transition hover:bg-black/5 disabled:opacity-50"
-            aria-label="إغلاق"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            {" "}
+            <X className="h-5 w-5" />{" "}
+          </Button>
         </header>
 
         <div className="min-h-0 flex-1 overflow-hidden p-4">
