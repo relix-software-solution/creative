@@ -30,27 +30,30 @@ function normalizePublicEventsList(data: unknown): PublicEventsListResponse {
   };
 }
 
-export async function getPublicEvents(params: PublicEventsListParams = {}) {
+export async function getPublicEvents(
+  params: PublicEventsListParams = {},
+): Promise<PublicEventsListResponse> {
   const response = await publicClient.get("/public/events", {
     params: {
       page: params.page ?? 1,
       limit: params.limit ?? 20,
-      search: params.search || undefined,
+      search: params.search?.trim() || undefined,
     },
   });
 
   return normalizePublicEventsList(response.data);
 }
 
-export async function getPublicEvent(id: string) {
+export async function getPublicEvent(id: string): Promise<PublicEvent> {
   const response = await publicClient.get(`/public/events/${id}`);
+
   return unwrapApiData<PublicEvent>(response.data);
 }
 
 export async function registerToPublicEvent(
   eventId: string,
   payload: PublicRegisterPayload,
-) {
+): Promise<PublicRegisterResponse> {
   const response = await publicClient.post(
     `/public/events/${eventId}/register`,
     payload,

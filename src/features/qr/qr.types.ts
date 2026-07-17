@@ -32,6 +32,8 @@ export type QrRecord = {
   registrationId?: string;
   qrToken?: string;
   token?: string;
+  value?: string;
+  signedToken?: string;
   status?: QrStatus;
 
   publicUrl?: string;
@@ -44,6 +46,7 @@ export type QrRecord = {
   image?: string;
 
   objectUrl?: string;
+  relativePath?: string;
 
   validFrom?: string | null;
   validUntil?: string | null;

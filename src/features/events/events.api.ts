@@ -2,6 +2,9 @@ import axios from "axios";
 import { adminClient } from "@/lib/api/admin-client";
 import { unwrapApiData } from "@/lib/api/unwrap-api-data";
 import {
+  BadgeAvailableFieldsResponse,
+  BadgeTemplate,
+  BadgeTemplatePayload,
   CreateEventPayload,
   EventBranding,
   EventBrandingPayload,
@@ -16,6 +19,17 @@ type DeleteEventResponse = {
   id?: string;
   message?: string;
   event?: EventItem;
+  jobId?: string;
+  storageCleanup?: {
+    jobId?: string;
+  };
+};
+
+type DeleteEventBrandingResponse = {
+  id?: string;
+  eventId?: string;
+  deleted?: boolean;
+  message?: string;
 };
 
 function isVisibleEvent(event: EventItem) {
@@ -53,17 +67,29 @@ function normalizeEventsList(data: unknown): EventsListResponse {
 function appendTheme(formData: FormData, branding?: EventBrandingPayload) {
   const theme = branding?.theme;
 
-  if (!theme) return;
+  if (!theme) {
+    return;
+  }
 
-  if (theme.primary) formData.append("theme.primary", theme.primary);
+  if (theme.primary) {
+    formData.append("theme.primary", theme.primary);
+  }
+
   if (theme.primaryHover) {
     formData.append("theme.primaryHover", theme.primaryHover);
   }
+
   if (theme.background) {
     formData.append("theme.background", theme.background);
   }
-  if (theme.text) formData.append("theme.text", theme.text);
-  if (theme.radius) formData.append("theme.radius", theme.radius);
+
+  if (theme.text) {
+    formData.append("theme.text", theme.text);
+  }
+
+  if (theme.radius) {
+    formData.append("theme.radius", theme.radius);
+  }
 }
 
 function buildBrandingFormData(
@@ -73,6 +99,7 @@ function buildBrandingFormData(
   const formData = new FormData();
 
   formData.append("eventId", eventId);
+
   appendTheme(formData, branding);
 
   if (branding?.logo) {
@@ -87,7 +114,9 @@ function buildBrandingFormData(
 }
 
 function hasBrandingPayload(branding?: EventBrandingPayload) {
-  if (!branding) return false;
+  if (!branding) {
+    return false;
+  }
 
   return Boolean(
     branding.logo ||
@@ -118,10 +147,20 @@ export async function getEvent(id: string) {
   return unwrapApiData<EventItem>(response.data);
 }
 
-export async function getEventBranding(eventId: string) {
-  const response = await adminClient.get(`/event-branding/${eventId}`);
+export async function getEventBranding(
+  eventId: string,
+): Promise<EventBranding | null> {
+  try {
+    const response = await adminClient.get(`/event-branding/${eventId}`);
 
-  return unwrapApiData<EventBranding>(response.data);
+    return unwrapApiData<EventBranding>(response.data);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 export async function createEventBranding(
@@ -130,11 +169,11 @@ export async function createEventBranding(
 ) {
   const formData = buildBrandingFormData(eventId, branding);
 
-  const response = await adminClient.post("/event-branding", formData, {
-    headers: {
-      "Content-Type": "multipart/form-data",
-    },
-  });
+  /*
+   * لا نضع Content-Type يدويًا.
+   * Axios يضيف multipart boundary الصحيح تلقائيًا.
+   */
+  const response = await adminClient.post("/event-branding", formData);
 
   return unwrapApiData<EventBranding>(response.data);
 }
@@ -148,14 +187,28 @@ export async function updateEventBranding(
   const response = await adminClient.patch(
     `/event-branding/${eventId}`,
     formData,
-    {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-    },
   );
 
   return unwrapApiData<EventBranding>(response.data);
+}
+
+export async function deleteEventBranding(eventId: string) {
+  const response = await adminClient.delete(`/event-branding/${eventId}`);
+
+  if (!response.data) {
+    return {
+      eventId,
+      deleted: true,
+    } satisfies DeleteEventBrandingResponse;
+  }
+
+  const data = unwrapApiData<DeleteEventBrandingResponse>(response.data);
+
+  return {
+    ...data,
+    eventId: data.eventId ?? eventId,
+    deleted: data.deleted ?? true,
+  };
 }
 
 export async function createEvent(
@@ -169,15 +222,22 @@ export async function createEvent(
     return { event };
   }
 
-  const branding = await createEventBranding(event.id, payload.branding);
+  try {
+    const branding = await createEventBranding(event.id, payload.branding);
 
-  return {
-    event: {
-      ...event,
+    return {
+      event: {
+        ...event,
+        branding,
+        eventBranding: branding,
+      },
       branding,
-    },
-    branding,
-  };
+    };
+  } catch {
+    throw new Error(
+      "تم إنشاء الفعالية، لكن تعذر حفظ الهوية البصرية. افتح الفعالية من القائمة وحاول تعديل الهوية مرة أخرى.",
+    );
+  }
 }
 
 export async function updateEvent(
@@ -193,32 +253,39 @@ export async function updateEvent(
   }
 
   try {
-    const branding = await updateEventBranding(id, payload.branding);
+    let branding: EventBranding;
+
+    try {
+      branding = await updateEventBranding(id, payload.branding);
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+
+      branding = await createEventBranding(id, payload.branding);
+    }
 
     return {
       event: {
         ...event,
         branding,
+        eventBranding: branding,
       },
       branding,
     };
-  } catch (error) {
-    if (!isNotFoundError(error)) throw error;
-
-    const branding = await createEventBranding(id, payload.branding);
-
-    return {
-      event: {
-        ...event,
-        branding,
-      },
-      branding,
-    };
+  } catch {
+    throw new Error(
+      "تم تعديل بيانات الفعالية، لكن تعذر حفظ الهوية البصرية. أعد فتح الفعالية وحاول حفظ الهوية مرة أخرى.",
+    );
   }
 }
 
 export async function deleteEvent(id: string) {
   const response = await adminClient.delete(`/events/${id}`);
+
+  if (!response.data) {
+    return { id };
+  }
 
   const data = unwrapApiData<DeleteEventResponse | EventItem>(response.data);
 
@@ -237,4 +304,90 @@ export async function deleteEvent(id: string) {
   }
 
   return { id };
+}
+
+/*
+ * Badge Template
+ * يبقى مؤقتًا هنا حتى ننقل صفحة البادج بالكامل إلى feature المستقل.
+ */
+
+function appendBadgeValue(formData: FormData, key: string, value: unknown) {
+  if (value === undefined || value === null || value === "") {
+    return;
+  }
+
+  formData.append(key, String(value));
+}
+
+function buildBadgeTemplateFormData(payload: BadgeTemplatePayload) {
+  const formData = new FormData();
+
+  appendBadgeValue(formData, "eventId", payload.eventId);
+  appendBadgeValue(formData, "name", payload.name);
+  appendBadgeValue(formData, "widthMm", payload.widthMm);
+  appendBadgeValue(formData, "heightMm", payload.heightMm);
+
+  appendBadgeValue(formData, "colors.primary", payload.colors?.primary);
+  appendBadgeValue(formData, "colors.text", payload.colors?.text);
+  appendBadgeValue(formData, "colors.background", payload.colors?.background);
+
+  if (payload.selectedFields) {
+    formData.append("selectedFields", JSON.stringify(payload.selectedFields));
+  }
+
+  if (payload.layout) {
+    formData.append("layout", JSON.stringify(payload.layout));
+  }
+
+  if (payload.backgroundImage) {
+    formData.append("backgroundImage", payload.backgroundImage);
+  }
+
+  return formData;
+}
+
+export async function getBadgeTemplateByEvent(eventId: string) {
+  const response = await adminClient.get(`/badge-templates/events/${eventId}`);
+
+  return unwrapApiData<BadgeTemplate>(response.data);
+}
+
+export async function createBadgeTemplate(payload: BadgeTemplatePayload) {
+  const formData = buildBadgeTemplateFormData(payload);
+
+  const response = await adminClient.post("/badge-templates", formData);
+
+  return unwrapApiData<BadgeTemplate>(response.data);
+}
+
+export async function updateBadgeTemplate(
+  eventId: string,
+  payload: BadgeTemplatePayload,
+) {
+  const formData = buildBadgeTemplateFormData(payload);
+
+  const response = await adminClient.patch(
+    `/badge-templates/events/${eventId}`,
+    formData,
+  );
+
+  return unwrapApiData<BadgeTemplate>(response.data);
+}
+
+export async function getBadgeAvailableFields(eventId: string) {
+  try {
+    const response = await adminClient.get(
+      `/badge-templates/events/${eventId}/available-fields`,
+    );
+
+    const data = unwrapApiData<BadgeAvailableFieldsResponse>(response.data);
+
+    return data.fields ?? [];
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return [];
+    }
+
+    throw error;
+  }
 }

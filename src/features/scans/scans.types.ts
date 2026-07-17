@@ -9,6 +9,7 @@ export type CreateScanPayload = {
   staffSessionId: string;
   checkpointId: string;
   qrToken: string;
+  registrationId?: string | null;
   type: ScanType;
   scannedAtDevice: string;
   payload?: Record<string, unknown>;
@@ -48,6 +49,22 @@ export type ScanRegistration = {
   } | null;
 };
 
+export type ScanQr = {
+  qrToken?: string | null;
+  token?: string | null;
+  signedToken?: string | null;
+  value?: string | null;
+
+  imageUrl?: string | null;
+  publicUrl?: string | null;
+  qrImageUrl?: string | null;
+  relativePath?: string | null;
+
+  status?: string | null;
+  validFrom?: string | null;
+  validUntil?: string | null;
+};
+
 export type ScanResult = {
   allowed?: boolean;
   success?: boolean;
@@ -55,6 +72,8 @@ export type ScanResult = {
   status?: string;
   reason?: string;
   message?: string;
+
+  qr?: ScanQr | null;
 
   scanEvent?: {
     id?: string;
@@ -80,6 +99,7 @@ export type ScanResult = {
     registration?: ScanRegistration | null;
     attendee?: ScanRegistration | null;
     visitor?: ScanRegistration | null;
+    qr?: ScanQr | null;
   };
 };
 

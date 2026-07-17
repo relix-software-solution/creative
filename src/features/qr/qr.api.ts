@@ -79,6 +79,7 @@ export async function revokeRegistrationQr(registrationId: string) {
     publicUrl: "",
     qrImageUrl: "",
     objectUrl: "",
+    relativePath: "",
     qr: data.qr
       ? {
           ...data.qr,
@@ -89,6 +90,7 @@ export async function revokeRegistrationQr(registrationId: string) {
           publicUrl: "",
           qrImageUrl: "",
           objectUrl: "",
+          relativePath: "",
         }
       : undefined,
   } satisfies QrResponse;

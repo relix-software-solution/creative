@@ -6,7 +6,8 @@ export type PublicRegistrationFieldType =
   | "NUMBER"
   | "DATE"
   | "SELECT"
-  | "CHECKBOX";
+  | "CHECKBOX"
+  | string;
 
 export type PublicEventsListParams = {
   page?: number;
@@ -25,13 +26,22 @@ export type PublicEventsListResponse = {
 export type PublicRegisterPayload = {
   attendeeTypeId: string;
   fullName: string;
-  phone?: string;
+  phone: string;
+
+  /**
+   * الحقول التالية اختيارية في الباك.
+   * تظهر في الواجهة فقط عندما يعيدها registrationFields للفعالية.
+   */
   email?: string;
   companyName?: string;
   jobTitle?: string;
   externalId?: string;
-  customFields?: Record<string, unknown>;
   notes?: string;
+
+  customFields?: Record<string, unknown>;
+
+  offlineOperationId?: string;
+  offlineQrToken?: string;
 };
 
 export type PublicQrTokenObject = {
@@ -44,28 +54,49 @@ export type PublicQrTokenObject = {
   qrImageUrl?: string;
 };
 
+export type PublicDigitalTicketImage = {
+  id?: string;
+  status?: string;
+  imageUrl?: string;
+  publicUrl?: string;
+  url?: string;
+  fileUrl?: string;
+};
+
 export type PublicRegisterResponse = {
   id?: string;
   publicId?: string;
   fullName?: string;
   phone?: string | null;
   email?: string | null;
+  companyName?: string | null;
+  jobTitle?: string | null;
+  externalId?: string | null;
+  notes?: string | null;
   attendeeTypeId?: string;
   customFields?: Record<string, unknown>;
   status?: string;
 
   /**
-   * الباك ممكن يرجعها string:
-   * qrToken: "eyJ..."
-   *
-   * أو object:
-   * qrToken: { token: "eyJ..." }
+   * Public registration يرجع qrToken مباشرة.
+   * أبقينا أكثر من شكل لأن بعض الاستجابات قد تغلفه داخل object.
    */
   qrToken?: string | PublicQrTokenObject | null;
-
   qrImageUrl?: string;
   imageUrl?: string;
   publicUrl?: string;
+  qr?: PublicQrTokenObject | null;
+
+  /**
+   * دعم جاهز لصورة Digital Ticket النهائية.
+   * يجب على الباك العام إرجاع أحد هذه الحقول عندما تصبح صورة PNG متاحة.
+   */
+  digitalTicketImageUrl?: string;
+  ticketImageUrl?: string;
+  digitalTicketStatus?: string;
+  digitalTicket?: PublicDigitalTicketImage | null;
+  ticket?: PublicDigitalTicketImage | null;
+  digitalTicketImage?: PublicDigitalTicketImage | null;
 
   registration?: {
     id?: string;
@@ -73,12 +104,21 @@ export type PublicRegisterResponse = {
     fullName?: string;
     phone?: string | null;
     email?: string | null;
+    companyName?: string | null;
+    jobTitle?: string | null;
+    externalId?: string | null;
+    notes?: string | null;
     status?: string;
     attendeeTypeId?: string;
     customFields?: Record<string, unknown>;
-  };
 
-  qr?: PublicQrTokenObject | null;
+    digitalTicketImageUrl?: string;
+    ticketImageUrl?: string;
+    digitalTicketStatus?: string;
+    digitalTicket?: PublicDigitalTicketImage | null;
+    ticket?: PublicDigitalTicketImage | null;
+    digitalTicketImage?: PublicDigitalTicketImage | null;
+  };
 };
 
 export type PublicRegistrationSuccessData = {
@@ -88,9 +128,18 @@ export type PublicRegistrationSuccessData = {
   fullName?: string;
   phone?: string | null;
   email?: string | null;
+  companyName?: string | null;
+  jobTitle?: string | null;
+  externalId?: string | null;
+  notes?: string | null;
   status?: string;
+
   qrToken?: string;
   qrImageUrl?: string;
+
+  digitalTicketImageUrl?: string;
+  digitalTicketStatus?: string;
+
   attendeeTypeId?: string;
   customFields?: Record<string, unknown>;
 };
@@ -110,16 +159,8 @@ export type PublicRegistrationField = {
   labelEn?: string | null;
   placeholderAr?: string | null;
   placeholderEn?: string | null;
-  type:
-    | "TEXT"
-    | "TEXTAREA"
-    | "SELECT"
-    | "CHECKBOX"
-    | "EMAIL"
-    | "PHONE"
-    | "NUMBER"
-    | "DATE"
-    | string;
+  type: PublicRegistrationFieldType;
+  source?: "FIXED" | "CUSTOM" | "SYSTEM" | string;
   options?: PublicRegistrationFieldOption[] | string[] | null;
   isRequired?: boolean;
   isActive?: boolean;
@@ -151,6 +192,7 @@ export type PublicEventBranding = {
   eventId: string;
   logoUrl?: string | null;
   backgroundImageUrl?: string | null;
+  certificateImageUrl?: string | null;
   theme?: PublicEventBrandingTheme | null;
   isActive?: boolean;
 };
@@ -165,10 +207,16 @@ export type PublicEvent = {
     nameEn?: string | null;
   } | null;
   type?: string;
-  titleAr: string;
+
+  /**
+   * أصبحت اختيارية في الفرونت حتى لا نفرض ظهور اسم الفعالية
+   * عندما تكون الخلفية المصممة متضمنة الاسم والشعار.
+   */
+  titleAr?: string | null;
   titleEn?: string | null;
   descriptionAr?: string | null;
   descriptionEn?: string | null;
+
   startsAt?: string | null;
   endsAt?: string | null;
   timezone?: string | null;

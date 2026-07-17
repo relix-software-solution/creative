@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Almarai } from "next/font/google";
 import { Providers } from "./providers";
 import "./globals.css";
+import { PwaRegister } from "@/components/pwa/PwaRegister";
 
 const almarai = Almarai({
   subsets: ["arabic"],
@@ -12,6 +13,16 @@ const almarai = Almarai({
 export const metadata: Metadata = {
   title: "Creative Group",
   description: "Event operations platform",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Scanner",
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport = {
+  themeColor: "#A88042",
 };
 
 export default function RootLayout({
@@ -22,6 +33,7 @@ export default function RootLayout({
   return (
     <html lang="ar" dir="rtl">
       <body className={almarai.className}>
+        <PwaRegister />
         <Providers>{children}</Providers>
       </body>
     </html>

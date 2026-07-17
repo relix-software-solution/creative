@@ -14,9 +14,6 @@ let refreshPromise: Promise<string | null> | null = null;
 
 export const adminClient = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    "Content-Type": "application/json",
-  },
 });
 
 async function refreshAccessToken() {

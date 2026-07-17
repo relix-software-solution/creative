@@ -2,26 +2,10 @@
 
 import { BrowserQRCodeReader } from "@zxing/browser";
 import {
-  AlertTriangle,
-  Camera,
-  CheckCircle2,
-  Clipboard,
-  Loader2,
-  Mail,
-  Phone,
-  QrCode,
-  RefreshCw,
-  ScanLine,
-  Search,
-  ShieldAlert,
-  ShieldCheck,
-  UserRound,
-  Wifi,
-  WifiOff,
-  Download,
-  Printer,
-  XCircle,
-} from "lucide-react";
+  getSavedStaffScannerContext,
+  saveStaffScannerContext,
+} from "@/lib/offline/staff-scanner-context";
+import { Loader2, RefreshCw, XCircle } from "lucide-react";
 import {
   CSSProperties,
   FormEvent,
@@ -31,597 +15,180 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  PublicEvent,
-  PublicEventBranding,
-  PublicRegistrationField,
-} from "@/features/public-events/public-events.types";
-import {
-  useCreateRegistrationQrImage,
-  useGenerateRegistrationQr,
-  useRegistrationQr,
-} from "@/features/qr/qr.queries";
-import { QrResponse } from "@/features/qr/qr.types";
-import { usePublicEvent } from "@/features/public-events/public-events.queries";
-import { Registration } from "@/features/registrations/registrations.types";
-import { useRegistrations } from "@/features/registrations/registrations.queries";
+  usePublicEvent,
+  useRegisterToPublicEvent,
+} from "@/features/public-events/public-events.queries";
 import { useCreateScan } from "@/features/scans/scans.queries";
-import {
-  CreateScanPayload,
-  ScanResult,
-  ScanType,
-} from "@/features/scans/scans.types";
+import { CreateScanPayload, ScanResult } from "@/features/scans/scans.types";
 import {
   useMyStaffAssignment,
   useStartMyStaffSession,
 } from "@/features/staff/staff.queries";
-import { StaffAssignment, StaffSession } from "@/features/staff/staff.types";
+import { StaffSession } from "@/features/staff/staff.types";
 import {
+  generateStaffVisitorQr,
+  getAllStaffVisitorsForOffline,
+  getStaffVisitorBadge,
+  StaffVisitorBadgeResponse,
+} from "@/features/staff-visitors/staff-visitors.api";
+import {
+  StaffVisitor,
+  StaffVisitorsResponse,
+  useStaffVisitors,
+} from "@/features/staff-visitors/staff-visitors.queries";
+import { StaffBadgePreviewModal } from "@/features/staff-scanner/components/StaffBadgePreviewModal";
+import { StaffCameraPanel } from "@/features/staff-scanner/components/StaffCameraPanel";
+import { StaffCreateVisitorModal } from "@/features/staff-scanner/components/StaffCreateVisitorModal";
+import { StaffScannerHeader } from "@/features/staff-scanner/components/StaffScannerHeader";
+import { StaffVisitorCard } from "@/features/staff-scanner/components/StaffVisitorCard";
+import { StaffVisitorsPanel } from "@/features/staff-scanner/components/StaffVisitorsPanel";
+import {
+  buildVisitorFromRegisterResponse,
+  cleanCustomFields,
+  createOperationId,
+  extractQrToken,
+  getAttendeeTypes,
+  getBackgroundUrl,
+  getCheckpointName,
+  getDefaultScanType,
+  getDeviceApiKey,
+  getDeviceLabel,
+  getEventTitle,
+  getExtraFields,
+  getLogoUrl,
+  getQrImageFromQrResponse,
+  getQrTokenFromQrResponse,
+  getRegistrationFields,
+  getRegistrationIdFromScan,
+  getResultMessage,
+  getTheme,
+  getVisibleFields,
+  getVisitorInfoFromScan,
+  getVisitorInfoFromStaffVisitor,
+  getVisitorQrImageUrl,
+  getVisitorQrToken,
+  isAllowedResult,
+} from "@/features/staff-scanner/utils/staff-scanner.helpers";
+import {
+  ScannerControls,
+  StaffScannerPublicEventResponse,
+  StaffScannerRegisterForm,
+  StaffScannerVisitor,
+  StaffScannerVisitorSource,
+} from "@/features/staff-scanner/utils/staff-scanner.types";
+import {
+  addOfflineVisitorRegistration,
   addScanToQueue,
-  getPendingScansCount,
+  cachePublicEventForStaffScanner,
+  cacheScannerAsset,
+  cacheStaffVisitors,
+  getCachedPublicEvent,
+  getCachedScannerAsset,
+  getCachedStaffVisitorsCount,
+  getPendingOfflineWorkCount,
+  replaceCachedStaffVisitorsForEvent,
+  searchCachedStaffVisitors,
+  syncQueuedScans,
+  syncQueuedVisitorRegistrations,
+  getCachedStaffBadgeTemplate,
+  saveCachedStaffBadgeTemplate,
 } from "@/lib/offline/staff-scanner-db";
+import { registerToPublicEvent } from "@/features/public-events/public-events.api";
 import { useDeviceStore } from "@/stores/device-store";
-
-type ScannerControls = {
-  stop: () => void;
-};
-
-type VisitorInfo = {
-  fullName: string;
-  phone: string;
-  email: string;
-  publicId: string;
-  status: string;
-  attendeeType: string;
-};
-
-const fallbackTheme = {
-  primary: "#A88042",
-  primaryHover: "#8F6D37",
-  background: "#F8F8FF",
-  text: "#4B4B4B",
-  radius: "1.5rem",
-};
-
-function createOperationId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `staff-scan-${crypto.randomUUID()}`;
-  }
-
-  return `staff-scan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function extractQrToken(decodedValue: string) {
-  const value = decodedValue.trim();
-
-  if (!value) return "";
-
-  try {
-    const url = new URL(value);
-
-    const queryKeys = ["qrToken", "token", "code", "qr", "t"];
-
-    for (const key of queryKeys) {
-      const queryValue = url.searchParams.get(key);
-
-      if (queryValue?.trim()) {
-        return queryValue.trim();
-      }
-    }
-
-    const parts = url.pathname.split("/").filter(Boolean);
-    const lastPart = parts[parts.length - 1];
-
-    return lastPart?.trim() || value;
-  } catch {
-    return value;
-  }
-}
-
-function getBranding(event?: PublicEvent | null): PublicEventBranding | null {
-  if (!event) return null;
-
-  return event.branding || event.eventBranding || null;
-}
-
-function resolveAssetUrl(url?: string | null) {
-  if (!url) return "";
-
-  if (
-    url.startsWith("http://") ||
-    url.startsWith("https://") ||
-    url.startsWith("blob:") ||
-    url.startsWith("data:")
-  ) {
-    return url;
-  }
-
-  const backendOrigin =
-    process.env.NEXT_PUBLIC_BACKEND_ORIGIN || "http://localhost:3000";
-
-  return `${backendOrigin}${url.startsWith("/") ? url : `/${url}`}`;
-}
-
-function getTheme(event?: PublicEvent | null) {
-  const theme = getBranding(event)?.theme;
-
-  return {
-    primary: theme?.primary || fallbackTheme.primary,
-    primaryHover: theme?.primaryHover || fallbackTheme.primaryHover,
-    background: theme?.background || fallbackTheme.background,
-    text: theme?.text || fallbackTheme.text,
-    radius: theme?.radius || fallbackTheme.radius,
-  };
-}
-
-function getLogoUrl(event?: PublicEvent | null) {
-  return resolveAssetUrl(getBranding(event)?.logoUrl);
-}
-
-function getEventTitle(assignment?: StaffAssignment | null) {
-  return (
-    assignment?.event?.titleAr ||
-    assignment?.event?.titleEn ||
-    assignment?.eventId ||
-    "الفعالية"
-  );
-}
-
-function getCheckpointName(assignment?: StaffAssignment | null) {
-  return (
-    assignment?.checkpoint?.nameAr ||
-    assignment?.checkpoint?.nameEn ||
-    assignment?.checkpoint?.code ||
-    "نقطة المسح"
-  );
-}
-
-function getDeviceLabel(assignment?: StaffAssignment | null) {
-  return (
-    assignment?.device?.name ||
-    assignment?.device?.code ||
-    assignment?.deviceId ||
-    "جهاز السكانر"
-  );
-}
-
-function getDeviceApiKey(assignment?: StaffAssignment | null) {
-  const device = assignment?.device as
-    | {
-        rawApiKey?: string | null;
-        deviceApiKey?: string | null;
-        apiKey?: string | null;
-      }
-    | null
-    | undefined;
-
-  return device?.rawApiKey || device?.deviceApiKey || device?.apiKey || null;
-}
-
-function getDefaultScanType(assignment?: StaffAssignment | null): ScanType {
-  if (assignment?.checkpoint?.type === "EXIT") return "EXIT";
-
-  return "ENTRY";
-}
-
-function isAllowedResult(result?: ScanResult | null) {
-  if (!result) return false;
-
-  return (
-    result.allowed === true ||
-    result.success === true ||
-    result.decision === "ALLOWED" ||
-    result.status === "ALLOWED" ||
-    result.scanEvent?.status === "ALLOWED"
-  );
-}
-
-function getResultMessage(result?: ScanResult | null) {
-  if (!result) return "";
-
-  const reason =
-    result.message || result.reason || result.scanEvent?.reason || "";
-
-  if (reason === "WRONG_EVENT") {
-    return "هذا الـ QR تابع لفعالية مختلفة عن تكليف هذا الستاف.";
-  }
-
-  if (reason === "QR_REVOKED") {
-    return "تم إلغاء هذا الـ QR ولا يمكن استخدامه.";
-  }
-
-  if (reason === "QR_EXPIRED") {
-    return "انتهت صلاحية هذا الـ QR.";
-  }
-
-  if (reason === "REGISTRATION_NOT_ACTIVE") {
-    return "تسجيل هذا الزائر غير فعال.";
-  }
-
-  if (reason === "ALREADY_ENTERED") {
-    return "تم تسجيل دخول هذا الزائر مسبقًا.";
-  }
-
-  if (reason) return reason;
-
-  return isAllowedResult(result) ? "تم السماح بالدخول" : "تم رفض الدخول";
-}
-
-function normalizeKey(key: string) {
-  return key
-    .toLowerCase()
-    .replace(/[\s_\-.]/g, "")
-    .replace(/[أإآ]/g, "ا")
-    .replace(/ة/g, "ه");
-}
-
-function getDeepStringValue(
-  source: unknown,
-  acceptedKeys: string[],
-  depth = 0,
-): string {
-  if (!source || depth > 6) return "";
-
-  const normalizedAcceptedKeys = acceptedKeys.map(normalizeKey);
-
-  if (Array.isArray(source)) {
-    for (const item of source) {
-      const value = getDeepStringValue(item, acceptedKeys, depth + 1);
-      if (value) return value;
-    }
-
-    return "";
-  }
-
-  if (typeof source !== "object") return "";
-
-  const record = source as Record<string, unknown>;
-
-  for (const [key, value] of Object.entries(record)) {
-    if (
-      normalizedAcceptedKeys.includes(normalizeKey(key)) &&
-      typeof value === "string" &&
-      value.trim()
-    ) {
-      return value.trim();
-    }
-  }
-
-  for (const value of Object.values(record)) {
-    if (value && typeof value === "object") {
-      const nestedValue = getDeepStringValue(value, acceptedKeys, depth + 1);
-
-      if (nestedValue) return nestedValue;
-    }
-  }
-
-  return "";
-}
-
-function getRegistrationCandidate(result?: ScanResult | null) {
-  if (!result) return null;
-
-  return (
-    result.registration ||
-    result.attendee ||
-    result.visitor ||
-    result.data?.registration ||
-    result.data?.attendee ||
-    result.data?.visitor ||
-    null
-  );
-}
-
-function getVisitorInfo(result?: ScanResult | null): VisitorInfo {
-  const registration = getRegistrationCandidate(result);
-
-  const attendeeType =
-    registration?.attendeeType?.nameAr ||
-    registration?.attendeeType?.nameEn ||
-    registration?.attendeeType?.code ||
-    getDeepStringValue(result, ["attendeeTypeName", "attendeeType", "type"]);
-
-  return {
-    fullName:
-      getDeepStringValue(result, [
-        "fullName",
-        "name",
-        "visitorName",
-        "attendeeName",
-        "الاسم",
-        "اسم الزائر",
-      ]) || "—",
-
-    phone:
-      getDeepStringValue(result, [
-        "phone",
-        "mobile",
-        "phoneNumber",
-        "رقم الهاتف",
-        "الهاتف",
-      ]) || "—",
-
-    email:
-      getDeepStringValue(result, [
-        "email",
-        "mail",
-        "البريد",
-        "البريد الإلكتروني",
-      ]) || "—",
-
-    publicId:
-      getDeepStringValue(result, [
-        "publicId",
-        "registrationNumber",
-        "code",
-        "registrationCode",
-        "رقم التسجيل",
-      ]) || "—",
-
-    status:
-      getDeepStringValue(result, ["status", "registrationStatus", "الحالة"]) ||
-      "—",
-
-    attendeeType: attendeeType || "—",
-  };
-}
-
-function formatDateTime(value?: string | null) {
-  const date = value ? new Date(value) : new Date();
-
-  return new Intl.DateTimeFormat("ar-SY", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(date);
-}
-
-function getResultTime(result?: ScanResult | null) {
-  return (
-    result?.scanEvent?.createdAt ||
-    result?.scanEvent?.scannedAtDevice ||
-    result?.movement?.createdAt ||
-    new Date().toISOString()
-  );
-}
-
-function getStatusLabel(status?: string | null) {
-  if (status === "ACTIVE") return "فعّال";
-  if (status === "PENDING") return "بانتظار التفعيل";
-  if (status === "CANCELLED") return "ملغي";
-  if (status === "BLOCKED") return "محظور";
-  if (status === "ARCHIVED") return "مؤرشف";
-
-  return status || "—";
-}
-
-function getRegistrationQrToken(registration?: Registration | null) {
-  if (!registration) return "";
-
-  if (typeof registration.qrToken === "string") {
-    return registration.qrToken.trim();
-  }
-
-  return (
-    registration.qrToken?.qrToken ||
-    registration.qrToken?.token ||
-    registration.qrToken?.value ||
-    registration.qrToken?.signedToken ||
-    registration.qr?.qrToken ||
-    registration.qr?.token ||
-    registration.qr?.value ||
-    registration.qr?.signedToken ||
-    ""
-  );
-}
-
-function getRegistrationQrImageUrl(registration?: Registration | null) {
-  if (!registration) return "";
-
-  return (
-    resolveAssetUrl(registration.qrImageUrl) ||
-    resolveAssetUrl(registration.imageUrl) ||
-    resolveAssetUrl(registration.publicUrl) ||
-    resolveAssetUrl(registration.qr?.qrImageUrl) ||
-    resolveAssetUrl(registration.qr?.imageUrl) ||
-    resolveAssetUrl(registration.qr?.publicUrl) ||
-    ""
-  );
-}
-
-function formatCustomValue(value: unknown) {
-  if (value === null || value === undefined || value === "") return "—";
-  if (typeof value === "boolean") return value ? "نعم" : "لا";
-  if (Array.isArray(value)) return value.map(String).join("، ");
-  if (typeof value === "object") return JSON.stringify(value);
-
-  return String(value);
-}
-
-function getFieldLabel(
-  key: string,
-  registrationFields: PublicRegistrationField[],
-) {
-  const field = registrationFields.find((item) => item.key === key);
-
-  return field?.labelAr || field?.labelEn || key;
-}
-
-function getRegistrationExtraFields(
-  registration: Registration,
-  registrationFields: PublicRegistrationField[],
-) {
-  const customFields = registration.customFields ?? {};
-  const knownKeys = new Set<string>();
-
-  const fromSchema = registrationFields
-    .filter((field) => {
-      const exists = customFields[field.key] !== undefined;
-
-      if (exists) {
-        knownKeys.add(field.key);
-      }
-
-      return exists;
-    })
-    .map((field) => ({
-      key: field.key,
-      label: field.labelAr || field.labelEn || field.key,
-      value: customFields[field.key],
-    }));
-
-  const unknownFields = Object.entries(customFields)
-    .filter(([key]) => !knownKeys.has(key))
-    .map(([key, value]) => ({
-      key,
-      label: getFieldLabel(key, registrationFields),
-      value,
-    }));
-
-  return [...fromSchema, ...unknownFields];
-}
-
-function getNestedQr(data?: QrResponse | null) {
-  if (!data) return null;
-  return data.qr || data.data || data;
-}
-
-function getQrTokenFromQrResponse(data?: QrResponse | null) {
-  const qr = getNestedQr(data);
-
-  return qr?.qrToken || qr?.token || "";
-}
-
-function getQrImageFromQrResponse(data?: QrResponse | null) {
-  const qr = getNestedQr(data);
-
-  return (
-    resolveAssetUrl(qr?.objectUrl) ||
-    resolveAssetUrl(qr?.publicUrl) ||
-    resolveAssetUrl(qr?.imageUrl) ||
-    resolveAssetUrl(qr?.qrImageUrl) ||
-    resolveAssetUrl(qr?.url) ||
-    resolveAssetUrl(qr?.path) ||
-    resolveAssetUrl(qr?.fileUrl) ||
-    resolveAssetUrl(qr?.qrUrl) ||
-    resolveAssetUrl(qr?.image) ||
-    ""
-  );
-}
-
-function getScanRegistration(result?: ScanResult | null) {
-  return getRegistrationCandidate(result);
-}
-
-function getRegistrationIdFromResult(result?: ScanResult | null) {
-  const registration = getScanRegistration(result);
-  return registration?.id || "";
-}
-
-function getScanExtraFields(
-  result: ScanResult | null,
-  registrationFields: PublicRegistrationField[],
-) {
-  const registration = getScanRegistration(result);
-  const customFields = registration?.customFields ?? {};
-  const knownKeys = new Set<string>();
-
-  const fromSchema = registrationFields
-    .filter((field) => {
-      const exists = customFields[field.key] !== undefined;
-
-      if (exists) knownKeys.add(field.key);
-
-      return exists;
-    })
-    .map((field) => ({
-      key: field.key,
-      label: field.labelAr || field.labelEn || field.key,
-      value: customFields[field.key],
-    }));
-
-  const unknownFields = Object.entries(customFields)
-    .filter(([key]) => !knownKeys.has(key))
-    .map(([key, value]) => ({
-      key,
-      label: getFieldLabel(key, registrationFields),
-      value,
-    }));
-
-  return [...fromSchema, ...unknownFields];
-}
-
-function getQrTokenFromScanOrQr(
-  result?: ScanResult | null,
-  qrData?: QrResponse | null,
-) {
-  const registration = getScanRegistration(result);
-
-  return (
-    getQrTokenFromQrResponse(qrData) ||
-    getRegistrationQrToken(registration as Registration | null) ||
-    ""
-  );
-}
-
-function getQrImageFromScanOrQr(
-  result?: ScanResult | null,
-  qrData?: QrResponse | null,
-) {
-  const registration = getScanRegistration(result);
-
-  return (
-    getQrImageFromQrResponse(qrData) ||
-    getRegistrationQrImageUrl(registration as Registration | null) ||
-    ""
-  );
-}
+import { createOfflineQrImageDataUrl } from "@/lib/offline/staff-offline-qr-image";
+import { createOfflineVisitorQrToken } from "@/lib/offline/staff-offline-qr";
 
 export default function StaffScannerPage() {
+  const [cachedContext, setCachedContext] = useState<
+    ReturnType<typeof getSavedStaffScannerContext>
+  >(() => {
+    if (typeof window === "undefined") return null;
+
+    return getSavedStaffScannerContext();
+  });
+
+  const [cachedEventData, setCachedEventData] = useState<
+    StaffScannerPublicEventResponse | undefined
+  >(undefined);
+
+  const [offlineVisitorsData, setOfflineVisitorsData] =
+    useState<StaffVisitorsResponse | null>(null);
+
+  const [cachedLogoUrl, setCachedLogoUrl] = useState("");
+  const [cachedBackgroundUrl, setCachedBackgroundUrl] = useState("");
+
+  const [isSyncingQueue, setIsSyncingQueue] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<ScannerControls | null>(null);
   const startedSessionRef = useRef(false);
   const isProcessingScanRef = useRef(false);
+  const [isSubmittingVisitorRegistration, setIsSubmittingVisitorRegistration] =
+    useState(false);
+
+  const [isCachingVisitors, setIsCachingVisitors] = useState(false);
+  const [cachedVisitorsCount, setCachedVisitorsCount] = useState(0);
+  const cachedVisitorsEventRef = useRef("");
 
   const setScannerContext = useDeviceStore((state) => state.setScannerContext);
 
   const assignmentId = useDeviceStore((state) => state.assignmentId);
   const eventId = useDeviceStore((state) => state.eventId);
-  const eventTitle = useDeviceStore((state) => state.eventTitle);
   const checkpointId = useDeviceStore((state) => state.checkpointId);
-  const checkpointName = useDeviceStore((state) => state.checkpointName);
   const checkpointType = useDeviceStore((state) => state.checkpointType);
   const deviceId = useDeviceStore((state) => state.deviceId);
-  const deviceName = useDeviceStore((state) => state.deviceName);
-  const deviceCode = useDeviceStore((state) => state.deviceCode);
-  const deviceApiKey = useDeviceStore((state) => state.deviceApiKey);
   const staffSessionId = useDeviceStore((state) => state.staffSessionId);
+  const storedDeviceApiKey = useDeviceStore((state) => state.deviceApiKey);
 
   const [staffSession, setStaffSession] = useState<StaffSession | null>(null);
-  const [qrToken, setQrToken] = useState("");
 
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [lastOfflineSaved, setLastOfflineSaved] = useState(false);
+  const [rawScanResult, setRawScanResult] = useState<ScanResult | null>(null);
+  const [selectedVisitor, setSelectedVisitor] =
+    useState<StaffScannerVisitor | null>(null);
+
+  const [visitorSource, setVisitorSource] =
+    useState<StaffScannerVisitorSource>("lookup");
 
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine,
   );
+
   const [pendingCount, setPendingCount] = useState(0);
+  const [lastOfflineSaved, setLastOfflineSaved] = useState(false);
 
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isCameraStarting, setIsCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState("");
-  const [manualError, setManualError] = useState("");
 
-  const [registrationSearchInput, setRegistrationSearchInput] = useState("");
-  const [registrationSearch, setRegistrationSearch] = useState("");
-  const [selectedRegistration, setSelectedRegistration] =
-    useState<Registration | null>(null);
+  const [visitorSearchInput, setVisitorSearchInput] = useState("");
+  const [visitorSearch, setVisitorSearch] = useState("");
+
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+
+  const [registerForm, setRegisterForm] = useState<StaffScannerRegisterForm>({
+    fullName: "",
+    phone: "",
+    email: "",
+  });
+
+  const [registerAttendeeTypeId, setRegisterAttendeeTypeId] = useState("");
+  const [registerCustomFields, setRegisterCustomFields] = useState<
+    Record<string, unknown>
+  >({});
+  const [registerErrors, setRegisterErrors] = useState<Record<string, string>>(
+    {},
+  );
+
+  const [showingVisitorQrId, setShowingVisitorQrId] = useState("");
+  const [scanningVisitorId, setScanningVisitorId] = useState("");
+  const [printingVisitorId, setPrintingVisitorId] = useState("");
+
+  const [badgePreviewOpen, setBadgePreviewOpen] = useState(false);
+  const [badgePreviewData, setBadgePreviewData] =
+    useState<StaffVisitorBadgeResponse | null>(null);
+  const [badgePreviewVisitor, setBadgePreviewVisitor] =
+    useState<StaffVisitor | null>(null);
 
   const assignmentQuery = useMyStaffAssignment();
   const startMySessionMutation = useStartMyStaffSession();
@@ -632,19 +199,52 @@ export default function StaffScannerPage() {
 
   const activeContext = useMemo(() => {
     return {
-      eventId: staffSession?.eventId || assignment?.eventId || eventId || "",
+      eventId:
+        staffSession?.eventId ||
+        assignment?.eventId ||
+        eventId ||
+        cachedContext?.eventId ||
+        "",
+
       checkpointId:
         staffSession?.checkpointId ||
         assignment?.checkpointId ||
         checkpointId ||
+        cachedContext?.checkpointId ||
         "",
+
       deviceId:
-        staffSession?.deviceId || assignment?.deviceId || deviceId || "",
-      staffSessionId: staffSession?.id || staffSessionId || "",
-      eventTitle: getEventTitle(assignment),
-      checkpointName: getCheckpointName(assignment),
-      checkpointType: assignment?.checkpoint?.type || checkpointType || null,
-      deviceLabel: getDeviceLabel(assignment),
+        staffSession?.deviceId ||
+        assignment?.deviceId ||
+        deviceId ||
+        cachedContext?.deviceId ||
+        "",
+
+      staffSessionId:
+        staffSession?.id ||
+        staffSessionId ||
+        cachedContext?.staffSessionId ||
+        "",
+
+      eventTitle: assignment
+        ? getEventTitle(assignment)
+        : cachedContext?.eventTitle || "المعرض",
+
+      checkpointName: assignment
+        ? getCheckpointName(assignment)
+        : cachedContext?.checkpointName || "بوابة الدخول",
+
+      checkpointType:
+        assignment?.checkpoint?.type ||
+        checkpointType ||
+        cachedContext?.checkpointType ||
+        null,
+
+      deviceLabel: assignment
+        ? getDeviceLabel(assignment)
+        : cachedContext?.deviceName ||
+          cachedContext?.deviceCode ||
+          "Staff Scanner Device",
     };
   }, [
     assignment,
@@ -654,33 +254,68 @@ export default function StaffScannerPage() {
     deviceId,
     staffSessionId,
     checkpointType,
+    cachedContext,
   ]);
 
-  const publicEventQuery = usePublicEvent(activeContext.eventId);
-  const publicEvent = publicEventQuery.data ?? null;
+  const activeDeviceApiKey = useMemo(() => {
+    return (
+      getDeviceApiKey(assignment) ||
+      storedDeviceApiKey ||
+      cachedContext?.deviceApiKey ||
+      ""
+    );
+  }, [assignment, storedDeviceApiKey, cachedContext?.deviceApiKey]);
 
-  const theme = useMemo(() => getTheme(publicEvent), [publicEvent]);
-  const logoUrl = useMemo(() => getLogoUrl(publicEvent), [publicEvent]);
+  const activeAssignmentId =
+    assignment?.id || assignmentId || cachedContext?.assignmentId || undefined;
 
-  const registrationFields = useMemo(() => {
-    return publicEvent?.registrationFields ?? [];
-  }, [publicEvent?.registrationFields]);
+  const publicEventQuery = usePublicEvent(activeContext.eventId, isOnline);
 
-  const registrationSearchEnabled = Boolean(
-    activeContext.eventId && registrationSearch.trim().length >= 2,
+  const onlineEventData = publicEventQuery.data as
+    | StaffScannerPublicEventResponse
+    | undefined;
+
+  const eventData = (onlineEventData || cachedEventData) as
+    | StaffScannerPublicEventResponse
+    | undefined;
+
+  const theme = useMemo(() => getTheme(eventData), [eventData]);
+
+  const rawLogoUrl = useMemo(() => getLogoUrl(eventData), [eventData]);
+
+  const rawBackgroundUrl = useMemo(
+    () => getBackgroundUrl(eventData),
+    [eventData],
   );
 
-  const registrationsQuery = useRegistrations(
-    {
-      page: 1,
-      limit: 8,
-      eventId: activeContext.eventId || undefined,
-      search: registrationSearch.trim() || undefined,
-    },
-    registrationSearchEnabled,
+  const logoUrl = isOnline
+    ? rawLogoUrl || cachedLogoUrl
+    : cachedLogoUrl || rawLogoUrl;
+
+  const backgroundUrl = isOnline
+    ? rawBackgroundUrl || cachedBackgroundUrl
+    : cachedBackgroundUrl || rawBackgroundUrl;
+
+  const attendeeTypes = useMemo(() => getAttendeeTypes(eventData), [eventData]);
+
+  const registrationFields = useMemo(
+    () => getRegistrationFields(eventData),
+    [eventData],
   );
 
-  const searchedRegistrations = registrationsQuery.data?.items ?? [];
+  const defaultAttendeeType = attendeeTypes[0];
+
+  const visibleRegisterFields = useMemo(() => {
+    if (!registerAttendeeTypeId) return [];
+
+    return getVisibleFields(registrationFields, registerAttendeeTypeId);
+  }, [registrationFields, registerAttendeeTypeId]);
+
+  const visitorSearchEnabled = Boolean(visitorSearch.trim().length >= 2);
+
+  const searchedVisitors = offlineVisitorsData?.visitors?.items ?? [];
+
+  const registerMutation = useRegisterToPublicEvent(activeContext.eventId);
 
   const isReady = Boolean(
     activeContext.eventId &&
@@ -689,44 +324,46 @@ export default function StaffScannerPage() {
     activeContext.staffSessionId,
   );
 
-  const isSubmitting = createScanMutation.isPending;
-  const allowed = isAllowedResult(scanResult);
-  const visitor = getVisitorInfo(scanResult);
+  const isSubmittingScan = createScanMutation.isPending;
+  const isRegistering =
+    registerMutation.isPending || isSubmittingVisitorRegistration;
 
-  const scannedRegistrationId = getRegistrationIdFromResult(scanResult);
+  const scanVisitor: StaffScannerVisitor | null = useMemo(() => {
+    if (!rawScanResult) return null;
 
-  const registrationQrQuery = useRegistrationQr(scannedRegistrationId);
-  const createQrImageMutation = useCreateRegistrationQrImage();
-  const generateQrMutation = useGenerateRegistrationQr();
+    return getVisitorInfoFromScan(rawScanResult);
+  }, [rawScanResult]);
 
-  const scanQrImageUrl = getQrImageFromScanOrQr(
-    scanResult,
-    registrationQrQuery.data,
-  );
+  const displayVisitor = scanVisitor || selectedVisitor;
 
-  const scanQrToken = getQrTokenFromScanOrQr(
-    scanResult,
-    registrationQrQuery.data,
-  );
+  const scannedRegistrationId = getRegistrationIdFromScan(rawScanResult) as
+    | string
+    | undefined;
 
-  const scanExtraFields = useMemo(() => {
-    return getScanExtraFields(scanResult, registrationFields);
-  }, [scanResult, registrationFields]);
+  const displayRegistrationId =
+    scannedRegistrationId ||
+    displayVisitor?.registrationId ||
+    displayVisitor?.id ||
+    "";
 
-  const themedCardStyle: CSSProperties = {
-    borderRadius: `calc(${theme.radius} + 0.5rem)`,
-  };
+  const cardQrToken =
+    displayVisitor?.qrToken || getQrTokenFromQrResponse(rawScanResult) || "";
 
-  const themedSoftStyle: CSSProperties = {
-    borderRadius: theme.radius,
+  const cardQrImageUrl =
+    displayVisitor?.qrImageUrl || getQrImageFromQrResponse(rawScanResult) || "";
+
+  const displayExtraFields = displayVisitor
+    ? getExtraFields(displayVisitor.customFields ?? {}, registrationFields)
+    : [];
+
+  const pageStyle: CSSProperties = {
     backgroundColor: theme.background,
     color: theme.text,
-  };
-
-  const themedButtonStyle: CSSProperties = {
-    borderRadius: theme.radius,
-    backgroundColor: theme.primary,
-    boxShadow: `0 18px 40px ${theme.primary}33`,
+    backgroundImage: backgroundUrl
+      ? `linear-gradient(rgba(248,248,255,0.92), rgba(248,248,255,0.94)), url(${backgroundUrl})`
+      : `radial-gradient(circle at top right, ${theme.primary}22, transparent 34%)`,
+    backgroundSize: "cover",
+    backgroundPosition: "center",
   };
 
   useEffect(() => {
@@ -748,6 +385,173 @@ export default function StaffScannerPage() {
   }, []);
 
   useEffect(() => {
+    if (!isOnline) return;
+    if (!activeContext.eventId || !activeContext.deviceId) return;
+
+    const timer = window.setTimeout(() => {
+      syncOfflineQueue();
+    }, 800);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, activeContext.eventId, activeContext.deviceId]);
+
+  useEffect(() => {
+    if (!activeContext.eventId) return;
+
+    let cancelled = false;
+
+    getCachedPublicEvent(activeContext.eventId).then((cached) => {
+      if (cancelled || !cached?.data) return;
+
+      setCachedEventData(cached.data as StaffScannerPublicEventResponse);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeContext.eventId]);
+
+  useEffect(() => {
+    if (!activeContext.eventId || !onlineEventData) return;
+
+    let cancelled = false;
+
+    cachePublicEventForStaffScanner(activeContext.eventId, onlineEventData).then(
+      () => {
+        if (!cancelled) {
+          setCachedEventData(onlineEventData);
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeContext.eventId, onlineEventData]);
+
+  useEffect(() => {
+    if (!rawLogoUrl) {
+      const timer = window.setTimeout(() => setCachedLogoUrl(""), 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    let cancelled = false;
+
+    async function hydrateLogo() {
+      const cached = await getCachedScannerAsset(rawLogoUrl);
+
+      if (!cancelled && cached?.dataUrl) {
+        setCachedLogoUrl(cached.dataUrl);
+      }
+
+      if (!isOnline) return;
+
+      try {
+        const next = await cacheScannerAsset(rawLogoUrl);
+
+        if (!cancelled && next?.dataUrl) {
+          setCachedLogoUrl(next.dataUrl);
+        }
+      } catch {
+        // Asset cache is best-effort only.
+      }
+    }
+
+    hydrateLogo();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rawLogoUrl, isOnline]);
+
+  useEffect(() => {
+    if (!rawBackgroundUrl) {
+      const timer = window.setTimeout(() => setCachedBackgroundUrl(""), 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    let cancelled = false;
+
+    async function hydrateBackground() {
+      const cached = await getCachedScannerAsset(rawBackgroundUrl);
+
+      if (!cancelled && cached?.dataUrl) {
+        setCachedBackgroundUrl(cached.dataUrl);
+      }
+
+      if (!isOnline) return;
+
+      try {
+        const next = await cacheScannerAsset(rawBackgroundUrl);
+
+        if (!cancelled && next?.dataUrl) {
+          setCachedBackgroundUrl(next.dataUrl);
+        }
+      } catch {
+        // Asset cache is best-effort only.
+      }
+    }
+
+    hydrateBackground();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rawBackgroundUrl, isOnline]);
+
+  useEffect(() => {
+    if (!isOnline) return;
+    if (!activeContext.eventId) return;
+    if (!isReady) return;
+
+    if (cachedVisitorsEventRef.current === activeContext.eventId) return;
+
+    cachedVisitorsEventRef.current = activeContext.eventId;
+
+    const timer = window.setTimeout(() => {
+      refreshOfflineVisitorsCache({ silent: true });
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, activeContext.eventId, isReady]);
+
+  useEffect(() => {
+    if (!activeContext.eventId) return;
+
+    getCachedStaffVisitorsCount(activeContext.eventId).then((count) => {
+      setCachedVisitorsCount(count);
+    });
+  }, [activeContext.eventId]);
+
+  useEffect(() => {
+    if (!activeContext.eventId || !visitorSearchEnabled) {
+      const timer = window.setTimeout(() => setOfflineVisitorsData(null), 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    let cancelled = false;
+
+    searchCachedStaffVisitors(activeContext.eventId, visitorSearch, 20).then(
+      (response) => {
+        if (cancelled) return;
+
+        setOfflineVisitorsData(response as StaffVisitorsResponse);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeContext.eventId, visitorSearch, visitorSearchEnabled]);
+
+  useEffect(() => {
     refreshPendingCount();
   }, []);
 
@@ -760,7 +564,7 @@ export default function StaffScannerPage() {
   useEffect(() => {
     if (!assignment) return;
 
-    setScannerContext({
+    const nextContext = {
       assignmentId: assignment.id,
       eventId: assignment.eventId,
       eventTitle: getEventTitle(assignment),
@@ -771,9 +575,17 @@ export default function StaffScannerPage() {
       deviceName: assignment.device?.name ?? null,
       deviceCode: assignment.device?.code ?? null,
       deviceApiKey: getDeviceApiKey(assignment),
-      staffSessionId: null,
-    });
-  }, [assignment, setScannerContext]);
+      staffSessionId: cachedContext?.staffSessionId || null,
+      savedAt: new Date().toISOString(),
+    };
+
+    setScannerContext(nextContext);
+    saveStaffScannerContext(nextContext);
+
+    const timer = window.setTimeout(() => setCachedContext(nextContext), 0);
+
+    return () => window.clearTimeout(timer);
+  }, [assignment, setScannerContext, cachedContext?.staffSessionId]);
 
   useEffect(() => {
     if (!assignment) return;
@@ -785,12 +597,37 @@ export default function StaffScannerPage() {
       onSuccess: (session) => {
         setStaffSession(session);
 
-        setScannerContext({
-          staffSessionId: session.id,
+        const nextContext = {
+          assignmentId: assignment.id,
           eventId: session.eventId || assignment.eventId,
+          eventTitle: getEventTitle(assignment),
           checkpointId: session.checkpointId || assignment.checkpointId,
+          checkpointName: getCheckpointName(assignment),
+          checkpointType: assignment.checkpoint?.type ?? null,
           deviceId: session.deviceId || assignment.deviceId,
+          deviceName: assignment.device?.name ?? null,
+          deviceCode: assignment.device?.code ?? null,
+          deviceApiKey: getDeviceApiKey(assignment),
+          staffSessionId: session.id,
+          savedAt: new Date().toISOString(),
+        };
+
+        setScannerContext({
+          assignmentId: nextContext.assignmentId,
+          eventId: nextContext.eventId,
+          eventTitle: nextContext.eventTitle,
+          checkpointId: nextContext.checkpointId,
+          checkpointName: nextContext.checkpointName,
+          checkpointType: nextContext.checkpointType,
+          deviceId: nextContext.deviceId,
+          deviceName: nextContext.deviceName,
+          deviceCode: nextContext.deviceCode,
+          deviceApiKey: nextContext.deviceApiKey,
+          staffSessionId: session.id,
         });
+
+        saveStaffScannerContext(nextContext);
+        setCachedContext(nextContext);
       },
 
       onError: () => {
@@ -800,32 +637,98 @@ export default function StaffScannerPage() {
   }, [assignment, setScannerContext, startMySessionMutation]);
 
   async function refreshPendingCount() {
-    const count = await getPendingScansCount();
+    const count = await getPendingOfflineWorkCount();
     setPendingCount(count);
   }
 
-  function clearResult() {
-    setScanResult(null);
-    setLastOfflineSaved(false);
-    setManualError("");
+  async function syncOfflineQueue() {
+    if (isSyncingQueue) return;
+
+    if (!navigator.onLine) {
+      toast.error("لا يوجد اتصال للمزامنة.");
+      return;
+    }
+
+    setIsSyncingQueue(true);
+
+    try {
+      const visitorResult = await syncQueuedVisitorRegistrations({
+        registerVisitor: (eventId, payload) =>
+          registerToPublicEvent(eventId, payload),
+      });
+
+      const scanResult = await syncQueuedScans({
+        submitScan: (payload) =>
+          createScanMutation.mutateAsync({
+            payload,
+            deviceApiKey: activeDeviceApiKey,
+          }),
+      });
+
+      await refreshPendingCount();
+
+      const total = visitorResult.total + scanResult.total;
+      const synced = visitorResult.synced + scanResult.synced;
+      const failed = visitorResult.failed + scanResult.failed;
+
+      if (visitorResult.synced > 0) {
+        refreshOfflineVisitorsCache({ silent: true });
+      }
+
+      if (total === 0) {
+        toast.info("لا توجد عمليات معلقة للمزامنة.");
+        return;
+      }
+
+      if (synced > 0 && failed === 0) {
+        toast.success(`تمت مزامنة ${synced} عملية بنجاح.`);
+        return;
+      }
+
+      if (synced > 0 && failed > 0) {
+        toast.warning(`تمت مزامنة ${synced} عملية، وفشل ${failed}.`);
+        return;
+      }
+
+      if (failed > 0) {
+        toast.error(`فشلت مزامنة ${failed} عملية.`);
+      }
+    } finally {
+      setIsSyncingQueue(false);
+    }
+  }
+
+  function hasHttpResponse(error: unknown) {
+    return Boolean(
+      error &&
+      typeof error === "object" &&
+      "response" in error &&
+      (error as { response?: unknown }).response,
+    );
+  }
+
+  function clearScanResult() {
+    setRawScanResult(null);
+    setSelectedVisitor(null);
+    setVisitorSource("lookup");
     setCameraError("");
-    setQrToken("");
-    setSelectedRegistration(null);
+    setLastOfflineSaved(false);
     isProcessingScanRef.current = false;
   }
 
   function validateScan(token: string) {
     if (!isReady) {
-      setManualError("جاري تجهيز جلسة السكانر، حاول بعد لحظات.");
+      setCameraError("جاري تجهيز جلسة السكانر، حاول بعد لحظات.");
       return false;
     }
 
     if (!token.trim()) {
-      setManualError("QR Token مطلوب");
+      setCameraError("لا يوجد QR Token لتنفيذ السكان.");
+      toast.error("لا يوجد QR Token لهذا الزائر.");
       return false;
     }
 
-    setManualError("");
+    setCameraError("");
     return true;
   }
 
@@ -840,9 +743,12 @@ export default function StaffScannerPage() {
       type: scanType,
       scannedAtDevice: new Date().toISOString(),
       payload: {
-        source: deviceApiKey ? "staff-device-scanner" : "staff-jwt-scanner",
+        source: activeDeviceApiKey
+          ? "staff-device-scanner"
+          : "staff-jwt-scanner",
         mode: isOnline ? "online" : "offline",
-        assignmentId,
+        assignmentId: activeAssignmentId,
+        trigger: "staff-table-or-camera-scan",
       },
     };
   }
@@ -852,50 +758,128 @@ export default function StaffScannerPage() {
       await addScanToQueue(payload);
       await refreshPendingCount();
 
+      setRawScanResult(null);
+      setSelectedVisitor(null);
       setLastOfflineSaved(true);
-      setScanResult(null);
-      setQrToken("");
       isProcessingScanRef.current = false;
 
       toast.warning("تم حفظ العملية محليًا لعدم وجود اتصال");
       return;
     }
 
-    createScanMutation.mutate(
-      {
+    try {
+      const data = await createScanMutation.mutateAsync({
         payload,
-        deviceApiKey,
-      },
-      {
-        onSuccess: (data) => {
-          setScanResult(data);
-          setSelectedRegistration(null);
-          setLastOfflineSaved(false);
-          setQrToken("");
-          isProcessingScanRef.current = false;
+        deviceApiKey: activeDeviceApiKey,
+      });
 
-          if (isAllowedResult(data)) {
-            toast.success("تم السماح بالدخول");
-          } else {
-            toast.error(getResultMessage(data));
-          }
+      setRawScanResult(data);
+      setSelectedVisitor(null);
+      setVisitorSource("scan");
+      setLastOfflineSaved(false);
+      isProcessingScanRef.current = false;
 
-          if ("vibrate" in navigator) {
-            navigator.vibrate?.(isAllowedResult(data) ? 120 : [120, 80, 120]);
-          }
-        },
+      if (isAllowedResult(data)) {
+        toast.success("تم السماح بالدخول");
+      } else {
+        toast.error(getResultMessage(data));
+      }
 
-        onError: async () => {
-          await addScanToQueue(payload);
-          await refreshPendingCount();
+      if ("vibrate" in navigator) {
+        navigator.vibrate?.(isAllowedResult(data) ? 120 : [120, 80, 120]);
+      }
+    } catch (error) {
+      if (!hasHttpResponse(error)) {
+        await addScanToQueue(payload);
+        await refreshPendingCount();
 
-          setScanResult(null);
-          setLastOfflineSaved(true);
-          setQrToken("");
-          isProcessingScanRef.current = false;
-        },
-      },
-    );
+        setRawScanResult(null);
+        setSelectedVisitor(null);
+        setLastOfflineSaved(true);
+
+        toast.warning("تعذر الاتصال بالسيرفر، تم حفظ العملية محليًا");
+      }
+
+      isProcessingScanRef.current = false;
+    }
+  }
+
+  async function getVisitorQrTokenForScan(visitor: StaffVisitor) {
+    const existingToken = getVisitorQrToken(visitor);
+
+    if (existingToken) {
+      return existingToken;
+    }
+
+    if (!visitor.id) {
+      toast.error("لا يوجد رقم تسجيل لهذا الزائر.");
+      return "";
+    }
+
+    setShowingVisitorQrId(visitor.id);
+
+    try {
+      const response = await generateStaffVisitorQr(visitor.id);
+
+      const token =
+        getQrTokenFromQrResponse(response) ||
+        getQrTokenFromQrResponse(response.qr) ||
+        "";
+
+      const imageUrl =
+        getQrImageFromQrResponse(response) ||
+        getQrImageFromQrResponse(response.qr) ||
+        "";
+
+      if (!token) {
+        toast.error(
+          "تم طلب تجهيز QR لكن الباك لم يرجع qrToken. لازم endpoint توليد QR يرجع qr.qrToken أو qrToken.",
+        );
+        return "";
+      }
+
+      const scannerVisitor = getVisitorInfoFromStaffVisitor(visitor);
+
+      setRawScanResult(null);
+      setSelectedVisitor({
+        ...scannerVisitor,
+        qrToken: token,
+        qrImageUrl: imageUrl || scannerVisitor.qrImageUrl,
+      });
+      setVisitorSource("lookup");
+      setLastOfflineSaved(false);
+
+      refreshOfflineVisitorsCache({ silent: true });
+
+      return token;
+    } catch {
+      toast.error("تعذر تجهيز QR لهذا الزائر.");
+      return "";
+    } finally {
+      setShowingVisitorQrId("");
+    }
+  }
+
+  async function scanVisitorFromTable(visitor: StaffVisitor) {
+    const token = await getVisitorQrTokenForScan(visitor);
+
+    if (!token) return;
+    if (!validateScan(token)) return;
+
+    setScanningVisitorId(visitor.id);
+
+    try {
+      setRawScanResult(null);
+      setSelectedVisitor(null);
+      setVisitorSource("scan");
+      setLastOfflineSaved(false);
+      isProcessingScanRef.current = true;
+
+      await submitPayload(buildPayload(token));
+    } finally {
+      setScanningVisitorId("");
+      isProcessingScanRef.current = false;
+    }
   }
 
   async function handleDecodedQr(decodedText: string) {
@@ -915,63 +899,648 @@ export default function StaffScannerPage() {
     await submitPayload(buildPayload(token));
   }
 
-  async function submitManualScan(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
+  async function refreshOfflineVisitorsCache(options?: { silent?: boolean }) {
+    if (!activeContext.eventId) return;
 
-    const token = extractQrToken(qrToken);
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
 
-    if (!validateScan(token)) return;
+    if (!isOnline || !onlineNow) {
+      if (!options?.silent) {
+        toast.error("لا يوجد اتصال لتحديث مخزن الزوار.");
+      }
 
-    setScanResult(null);
-    setLastOfflineSaved(false);
-    setSelectedRegistration(null);
-    isProcessingScanRef.current = true;
+      return;
+    }
 
-    await submitPayload(buildPayload(token));
+    if (isCachingVisitors) return;
+
+    setIsCachingVisitors(true);
+
+    try {
+      const response = await getAllStaffVisitorsForOffline({
+        limit: 20,
+        maxPages: 500,
+      });
+
+      const items = response.visitors.items ?? [];
+      const itemsWithCachedQrImages: StaffVisitor[] = [];
+
+      for (const visitor of items) {
+        const qrToken = getVisitorQrToken(visitor);
+
+        if (qrToken) {
+          try {
+            const qrImageDataUrl = await createOfflineQrImageDataUrl(qrToken);
+
+            itemsWithCachedQrImages.push({
+              ...visitor,
+              qrImageUrl: qrImageDataUrl,
+              imageUrl: qrImageDataUrl,
+              publicUrl: qrImageDataUrl,
+            });
+
+            continue;
+          } catch {
+            // إذا فشل توليد QR من التوكن، نجرب الصورة الموجودة من السيرفر.
+          }
+        }
+
+        const remoteQrImageUrl = getVisitorQrImageUrl(visitor);
+
+        if (!remoteQrImageUrl || remoteQrImageUrl.startsWith("data:")) {
+          itemsWithCachedQrImages.push(visitor);
+          continue;
+        }
+
+        try {
+          const cachedAsset = await cacheScannerAsset(remoteQrImageUrl);
+
+          itemsWithCachedQrImages.push({
+            ...visitor,
+            qrImageUrl: cachedAsset?.dataUrl || remoteQrImageUrl,
+            imageUrl: cachedAsset?.dataUrl || remoteQrImageUrl,
+            publicUrl: cachedAsset?.dataUrl || remoteQrImageUrl,
+          });
+        } catch {
+          itemsWithCachedQrImages.push(visitor);
+        }
+      }
+
+      await replaceCachedStaffVisitorsForEvent(
+        activeContext.eventId,
+        itemsWithCachedQrImages,
+      );
+
+      const count = await getCachedStaffVisitorsCount(activeContext.eventId);
+      setCachedVisitorsCount(count);
+
+      if (visitorSearch.trim().length >= 2) {
+        const cachedSearch = await searchCachedStaffVisitors(
+          activeContext.eventId,
+          visitorSearch,
+          20,
+        );
+
+        setOfflineVisitorsData(cachedSearch as StaffVisitorsResponse);
+      }
+
+      if (!options?.silent) {
+        toast.success(`تم تحديث مخزن الزوار: ${count} زائر.`);
+      }
+    } catch {
+      if (!options?.silent) {
+        toast.error("تعذر تحديث مخزن الزوار من السيرفر.");
+      }
+    } finally {
+      setIsCachingVisitors(false);
+    }
   }
 
-  function submitRegistrationSearch(event?: FormEvent<HTMLFormElement>) {
+  async function submitVisitorSearch(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
 
-    const term = registrationSearchInput.trim();
+    const term = visitorSearchInput.trim();
 
     if (term.length < 2) {
       toast.error("اكتب حرفين على الأقل للبحث");
       return;
     }
 
-    setSelectedRegistration(null);
-    setRegistrationSearch(term);
-  }
-
-  function selectRegistration(registration: Registration) {
-    setSelectedRegistration(registration);
-    setScanResult(null);
-    setLastOfflineSaved(false);
-
-    const token = getRegistrationQrToken(registration);
-
-    if (token) {
-      setQrToken(token);
-    }
-  }
-
-  async function scanSelectedRegistration(registration: Registration) {
-    const token = getRegistrationQrToken(registration);
-
-    if (!token) {
-      toast.error("هذا التسجيل لا يحتوي QR Token");
+    if (!activeContext.eventId) {
+      toast.error("لا يوجد رقم فعالية للبحث.");
       return;
     }
 
+    setRawScanResult(null);
+    setSelectedVisitor(null);
+    setLastOfflineSaved(false);
+    setVisitorSearch(term);
+
+    const cachedSearch = await searchCachedStaffVisitors(
+      activeContext.eventId,
+      term,
+      20,
+    );
+
+    setOfflineVisitorsData(cachedSearch as StaffVisitorsResponse);
+
+    const total = cachedSearch.visitors.total ?? 0;
+
+    if (total === 0 && isOnline && cachedVisitorsCount === 0) {
+      toast.info("جاري تحميل الزوار لأول مرة ثم إعادة البحث.");
+
+      await refreshOfflineVisitorsCache({ silent: true });
+
+      const retrySearch = await searchCachedStaffVisitors(
+        activeContext.eventId,
+        term,
+        20,
+      );
+
+      setOfflineVisitorsData(retrySearch as StaffVisitorsResponse);
+    }
+  }
+
+  function openCreateModal() {
+    setRegisterForm({
+      fullName: "",
+      phone: "",
+      email: "",
+    });
+
+    setRegisterAttendeeTypeId(defaultAttendeeType?.id || "");
+    setRegisterCustomFields({});
+    setRegisterErrors({});
+    setCreateModalOpen(true);
+  }
+
+  function closeCreateModal() {
+    if (isRegistering) return;
+
+    setCreateModalOpen(false);
+  }
+
+  function updateRegisterForm(
+    key: keyof StaffScannerRegisterForm,
+    value: string,
+  ) {
+    setRegisterForm((current) => ({
+      ...current,
+      [key]: value,
+    }));
+
+    setRegisterErrors((current) => ({
+      ...current,
+      [key]: "",
+    }));
+  }
+
+  function updateRegisterCustomField(key: string, value: unknown) {
+    setRegisterCustomFields((current) => ({
+      ...current,
+      [key]: value,
+    }));
+
+    setRegisterErrors((current) => ({
+      ...current,
+      [key]: "",
+    }));
+  }
+
+  function validateRegisterForm() {
+    const nextErrors: Record<string, string> = {};
+
+    if (!registerAttendeeTypeId) {
+      nextErrors.attendeeTypeId = "نوع الحضور مطلوب";
+    }
+
+    if (!registerForm.fullName.trim()) {
+      nextErrors.fullName = "الاسم الكامل مطلوب";
+    }
+
+    if (!registerForm.phone.trim()) {
+      nextErrors.phone = "رقم الهاتف مطلوب";
+    }
+
+    if (!registerForm.email.trim()) {
+      nextErrors.email = "البريد الإلكتروني مطلوب";
+    } else if (!/^\S+@\S+\.\S+$/.test(registerForm.email.trim())) {
+      nextErrors.email = "البريد الإلكتروني غير صحيح";
+    }
+
+    visibleRegisterFields.forEach((field) => {
+      const value = registerCustomFields[field.key];
+
+      const isEmpty =
+        value === undefined ||
+        value === null ||
+        value === "" ||
+        value === false;
+
+      if (field.isRequired && isEmpty) {
+        nextErrors[field.key] =
+          `${field.labelAr || field.labelEn || field.key} مطلوب`;
+      }
+    });
+
+    setRegisterErrors(nextErrors);
+
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  async function submitRegisterForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!validateRegisterForm()) return;
+
+    if (!activeContext.eventId) {
+      toast.error("لا يوجد رقم فعالية لتسجيل الزائر.");
+      return;
+    }
+
+    const attendeeType = attendeeTypes.find(
+      (type) => type.id === registerAttendeeTypeId,
+    );
+
+    const customFields = cleanCustomFields(
+      visibleRegisterFields,
+      registerCustomFields,
+    );
+
+    const payload = {
+      attendeeTypeId: registerAttendeeTypeId,
+      fullName: registerForm.fullName.trim(),
+      phone: registerForm.phone.trim(),
+      email: registerForm.email.trim(),
+      customFields,
+    };
+
+    async function saveOfflineVisitor() {
+      const now = new Date().toISOString();
+
+      const localId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? `offline-visitor-${crypto.randomUUID()}`
+          : `offline-visitor-${Date.now()}-${Math.random()
+              .toString(16)
+              .slice(2)}`;
+
+      const operationId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? `visitor-registration-${crypto.randomUUID()}`
+          : `visitor-registration-${Date.now()}-${Math.random()
+              .toString(16)
+              .slice(2)}`;
+
+      const publicId = `OFFLINE-${Date.now().toString().slice(-8)}`;
+
+      const offlineQrToken = createOfflineVisitorQrToken({
+        eventId: activeContext.eventId,
+        localId,
+        operationId,
+        publicId,
+        fullName: payload.fullName,
+        createdAtDevice: now,
+      });
+
+      const offlineQrImageUrl =
+        await createOfflineQrImageDataUrl(offlineQrToken);
+
+      const { visitor } = await addOfflineVisitorRegistration({
+        eventId: activeContext.eventId,
+        payload,
+        attendeeType,
+        localId,
+        operationId,
+        publicId,
+        createdAtDevice: now,
+        offlineQrToken,
+        offlineQrImageUrl,
+      });
+
+      await refreshPendingCount();
+
+      toast.warning(
+        "تم تسجيل الزائر محليًا وتجهيز QR للطباعة. سيتم رفعه عند المزامنة.",
+      );
+
+      setCreateModalOpen(false);
+      setRawScanResult(null);
+      setSelectedVisitor(getVisitorInfoFromStaffVisitor(visitor));
+      setVisitorSource("created");
+      setLastOfflineSaved(false);
+
+      setVisitorSearchInput(visitor.publicId || visitor.fullName);
+      setVisitorSearch(visitor.publicId || visitor.fullName);
+
+      setOfflineVisitorsData((current) => {
+        const currentItems = current?.visitors?.items ?? [];
+
+        return {
+          event: current?.event || {
+            id: activeContext.eventId,
+          },
+          visitors: {
+            items: [visitor, ...currentItems],
+            page: 1,
+            limit: 20,
+            total: currentItems.length + 1,
+            totalPages: 1,
+          },
+        };
+      });
+    }
+
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+    if (!isOnline || !onlineNow) {
+      await saveOfflineVisitor();
+      return;
+    }
+
+    setIsSubmittingVisitorRegistration(true);
+
+    try {
+      const data = await registerToPublicEvent(activeContext.eventId, payload);
+
+      const visitor = buildVisitorFromRegisterResponse(data, {
+        attendeeTypeId: registerAttendeeTypeId,
+        attendeeType,
+        fullName: registerForm.fullName.trim(),
+        phone: registerForm.phone.trim(),
+        email: registerForm.email.trim(),
+        customFields,
+      });
+
+      toast.success("تم تسجيل الزائر بنجاح");
+
+      setCreateModalOpen(false);
+      setRawScanResult(null);
+      setSelectedVisitor(visitor);
+      setVisitorSource("created");
+      setLastOfflineSaved(false);
+
+      setVisitorSearchInput(visitor.publicId || visitor.fullName);
+      setVisitorSearch(visitor.publicId || visitor.fullName);
+
+      refreshOfflineVisitorsCache({ silent: true });
+    } catch (error) {
+      // إذا الخطأ Network Error / ERR_INTERNET_DISCONNECTED
+      // نخزن الزائر أوفلاين بدل ما نفشل العملية.
+      if (!hasHttpResponse(error)) {
+        await saveOfflineVisitor();
+        return;
+      }
+
+      toast.error("تعذر تسجيل الزائر. تحقق من البيانات أو صلاحيات التسجيل.");
+    } finally {
+      setIsSubmittingVisitorRegistration(false);
+    }
+  }
+
+  async function scanDisplayVisitor() {
+    if (!displayVisitor) return;
+
+    const token = cardQrToken || displayVisitor.qrToken || "";
+
     if (!validateScan(token)) return;
 
-    setSelectedRegistration(registration);
-    setScanResult(null);
+    setRawScanResult(null);
+    setSelectedVisitor(null);
+    setVisitorSource("scan");
     setLastOfflineSaved(false);
     isProcessingScanRef.current = true;
 
     await submitPayload(buildPayload(token));
+  }
+
+  async function showVisitorQr(visitor: StaffVisitor) {
+    if (!visitor.id) {
+      toast.error("لا يوجد رقم تسجيل لهذا الزائر.");
+      return;
+    }
+
+    const existingToken = getVisitorQrToken(visitor);
+    const existingImageUrl = getVisitorQrImageUrl(visitor);
+
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+    if ((!isOnline || !onlineNow) && existingToken) {
+      const scannerVisitor = getVisitorInfoFromStaffVisitor(visitor);
+
+      setRawScanResult(null);
+      setSelectedVisitor({
+        ...scannerVisitor,
+        qrToken: existingToken,
+        qrImageUrl:
+          existingImageUrl ||
+          (await createOfflineQrImageDataUrl(existingToken)),
+      });
+      setVisitorSource("lookup");
+      setLastOfflineSaved(false);
+
+      toast.success("تم تجهيز QR من المخزن المحلي");
+      return;
+    }
+
+    setShowingVisitorQrId(visitor.id);
+
+    try {
+      const response = await generateStaffVisitorQr(visitor.id);
+
+      const scannerVisitor = getVisitorInfoFromStaffVisitor(visitor);
+
+      const qrToken =
+        getQrTokenFromQrResponse(response) ||
+        getQrTokenFromQrResponse(response.qr) ||
+        scannerVisitor.qrToken ||
+        "";
+
+      const qrImageUrl =
+        getQrImageFromQrResponse(response) ||
+        getQrImageFromQrResponse(response.qr) ||
+        scannerVisitor.qrImageUrl ||
+        "";
+
+      setRawScanResult(null);
+      setSelectedVisitor({
+        ...scannerVisitor,
+        qrToken,
+        qrImageUrl,
+      });
+      setVisitorSource("lookup");
+      setLastOfflineSaved(false);
+
+      toast.success("تم تجهيز QR للزائر");
+      refreshOfflineVisitorsCache({ silent: true });
+    } catch {
+      if (existingToken) {
+        const scannerVisitor = getVisitorInfoFromStaffVisitor(visitor);
+
+        setRawScanResult(null);
+        setSelectedVisitor({
+          ...scannerVisitor,
+          qrToken: existingToken,
+          qrImageUrl:
+            existingImageUrl ||
+            (await createOfflineQrImageDataUrl(existingToken)),
+        });
+        setVisitorSource("lookup");
+        setLastOfflineSaved(false);
+
+        toast.success("تم تجهيز QR من المخزن المحلي");
+        return;
+      }
+
+      toast.error("تعذر تجهيز QR لهذا الزائر.");
+    } finally {
+      setShowingVisitorQrId("");
+    }
+  }
+
+  async function generateQrForDisplayVisitor() {
+    if (!displayRegistrationId) {
+      toast.error("لا يوجد رقم تسجيل لهذا الزائر.");
+      return;
+    }
+
+    setShowingVisitorQrId(displayRegistrationId);
+
+    try {
+      const response = await generateStaffVisitorQr(displayRegistrationId);
+
+      const qrToken = getQrTokenFromQrResponse(response);
+      const qrImageUrl = getQrImageFromQrResponse(response);
+
+      if (displayVisitor) {
+        setSelectedVisitor({
+          ...displayVisitor,
+          qrToken: qrToken || displayVisitor.qrToken,
+          qrImageUrl: qrImageUrl || displayVisitor.qrImageUrl,
+        });
+      }
+
+      toast.success("تم تجهيز QR للزائر");
+    } catch {
+      toast.error("تعذر تجهيز QR لهذا الزائر.");
+    } finally {
+      setShowingVisitorQrId("");
+    }
+  }
+
+  async function openBadgePreview(
+    registrationId: string,
+    visitor?: StaffVisitor,
+  ) {
+    if (!registrationId) {
+      toast.error("لا يوجد رقم تسجيل لهذا الزائر.");
+      return;
+    }
+
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+    async function openOfflineBadgePreview() {
+      if (!visitor) {
+        toast.error("لا توجد بيانات محلية كافية لطباعة البادج.");
+        return;
+      }
+
+      const cachedTemplate = activeContext.eventId
+        ? await getCachedStaffBadgeTemplate(activeContext.eventId)
+        : null;
+
+      if (!cachedTemplate?.template) {
+        toast.warning(
+          "لا يوجد قالب بادج محفوظ محليًا. افتح معاينة بادج مرة واحدة Online حتى يتم حفظ القالب.",
+        );
+      }
+
+      const qrToken = getVisitorQrToken(visitor);
+      let qrImageUrl = getVisitorQrImageUrl(visitor);
+
+      if (!qrImageUrl && qrToken) {
+        qrImageUrl = await createOfflineQrImageDataUrl(qrToken);
+      }
+
+      setBadgePreviewData({
+        template: cachedTemplate?.template ?? null,
+        registration: {
+          ...visitor,
+          qrImageUrl,
+        },
+        qr: {
+          qrToken,
+          token: qrToken,
+          qrImageUrl,
+          imageUrl: qrImageUrl,
+          publicUrl: qrImageUrl,
+          status: "OFFLINE_CACHED",
+        },
+        fields: getExtraFields(
+          visitor.customFields ?? {},
+          registrationFields,
+        ).map((field) => ({
+          key: field.key,
+          label: field.label,
+          labelAr: field.label,
+          value: field.value,
+        })),
+      });
+
+      setBadgePreviewVisitor({
+        ...visitor,
+        qrImageUrl,
+      });
+
+      setBadgePreviewOpen(true);
+    }
+
+    if (!isOnline || !onlineNow) {
+      await openOfflineBadgePreview();
+      return;
+    }
+
+    setPrintingVisitorId(registrationId);
+
+    try {
+      if (!activeContext.eventId) {
+        toast.error("لا يوجد رقم فعالية لجلب البادج.");
+        return;
+      }
+
+      const badgeData = await getStaffVisitorBadge(
+        activeContext.eventId,
+        registrationId,
+      );
+
+      await saveCachedStaffBadgeTemplate(
+        activeContext.eventId,
+        badgeData.template,
+      );
+
+      setBadgePreviewData(badgeData);
+      setBadgePreviewVisitor(visitor || null);
+      setBadgePreviewOpen(true);
+    } catch {
+      if (visitor) {
+        await openOfflineBadgePreview();
+        return;
+      }
+
+      toast.error("تعذر جلب بيانات البادج للطباعة.");
+    } finally {
+      setPrintingVisitorId("");
+    }
+  }
+
+  async function printVisitorBadge(visitor: StaffVisitor) {
+    await openBadgePreview(visitor.id, visitor);
+  }
+
+  async function printDisplayVisitorBadge() {
+    if (!displayVisitor) return;
+
+    await openBadgePreview(displayRegistrationId, {
+      id: displayRegistrationId,
+      publicId: displayVisitor.publicId ?? null,
+      fullName: displayVisitor.fullName,
+      phone: displayVisitor.phone ?? null,
+      email: displayVisitor.email ?? null,
+      status: displayVisitor.status ?? null,
+      customFields: displayVisitor.customFields ?? {},
+      attendeeType: {
+        id: "",
+        code: displayVisitor.attendeeTypeCode ?? null,
+        nameAr: displayVisitor.attendeeTypeName ?? null,
+        nameEn: displayVisitor.attendeeTypeName ?? null,
+      },
+      qrToken: displayVisitor.qrToken ?? null,
+      qrImageUrl: displayVisitor.qrImageUrl ?? null,
+    });
   }
 
   async function stopCamera() {
@@ -988,10 +1557,10 @@ export default function StaffScannerPage() {
 
   async function startCamera() {
     setCameraError("");
-    setManualError("");
-    setScanResult(null);
+    setRawScanResult(null);
+    setSelectedVisitor(null);
+    setVisitorSource("scan");
     setLastOfflineSaved(false);
-    setSelectedRegistration(null);
     isProcessingScanRef.current = false;
 
     if (!isReady) {
@@ -1051,26 +1620,15 @@ export default function StaffScannerPage() {
     }
   }
 
-  async function pasteFromClipboard() {
-    try {
-      const value = await navigator.clipboard.readText();
-
-      if (!value.trim()) return;
-
-      setQrToken(value.trim());
-      setManualError("");
-      toast.success("تم لصق QR Token");
-    } catch {
-      setManualError("تعذر قراءة الحافظة");
-    }
-  }
-
   async function startNewScan() {
-    clearResult();
+    clearScanResult();
     await startCamera();
   }
 
-  if (assignmentQuery.isLoading || startMySessionMutation.isPending) {
+  if (
+    (assignmentQuery.isLoading || startMySessionMutation.isPending) &&
+    !cachedContext
+  ) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center px-4">
         <div className="w-full max-w-md rounded-[2rem] border border-black/10 bg-white p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
@@ -1088,7 +1646,7 @@ export default function StaffScannerPage() {
     );
   }
 
-  if (assignmentQuery.isError) {
+  if (assignmentQuery.isError && !cachedContext) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center px-4">
         <div className="w-full max-w-md rounded-[2rem] border border-red-200 bg-white p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
@@ -1097,11 +1655,12 @@ export default function StaffScannerPage() {
           </div>
 
           <h1 className="mt-5 text-2xl font-extrabold text-[#4B4B4B]">
-            لا يوجد تكليف فعال
+            لا يوجد تكليف محفوظ
           </h1>
 
           <p className="mt-2 text-sm font-bold leading-7 text-[#4B4B4B]/60">
-            يرجى مراجعة المشرف لتفعيل تكليف السكانر لهذا الحساب.
+            افتح صفحة السكانر مرة واحدة أثناء وجود اتصال حتى يتم حفظ التكليف
+            وتشغيل وضع Offline.
           </p>
 
           <Button
@@ -1117,881 +1676,159 @@ export default function StaffScannerPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5 px-3 pb-10 sm:px-5 lg:px-8">
-      <section
-        className="overflow-hidden border border-black/10 bg-black text-white shadow-[0_24px_70px_rgba(0,0,0,0.14)]"
-        style={themedCardStyle}
+    <>
+      <main
+        className="min-h-screen px-3 py-5 sm:px-5 lg:px-8"
+        style={pageStyle}
       >
-        <div
-          className="p-5 sm:p-7"
-          style={{
-            background: `radial-gradient(circle at 20% 20%, ${theme.primary}55, transparent 35%), linear-gradient(135deg,#050505,#171717)`,
-          }}
-        >
-          <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
-            <div className="flex items-start gap-4">
-              {logoUrl ? (
-                <div
-                  className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden border border-white/10 bg-white/10 p-2"
-                  style={{ borderRadius: theme.radius }}
-                >
-                  <img
-                    src={logoUrl}
-                    alt={activeContext.eventTitle}
-                    className="max-h-full max-w-full object-contain"
-                  />
-                </div>
-              ) : null}
+        <div className="mx-auto max-w-7xl space-y-5">
+          <StaffScannerHeader
+            theme={theme}
+            logoUrl={logoUrl}
+            eventTitle={activeContext.eventTitle}
+            checkpointName={activeContext.checkpointName}
+            deviceLabel={activeContext.deviceLabel}
+            isOnline={isOnline}
+            isReady={isReady}
+            pendingCount={pendingCount}
+            scanType={scanType}
+          />
 
-              <div>
-                <p
-                  className="text-xs font-extrabold uppercase tracking-wide"
-                  style={{ color: theme.primary }}
-                >
-                  Staff Scanner
-                </p>
+          <section className="flex flex-col gap-3 rounded-[1.5rem] border border-black/10 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-extrabold text-[#2F3137]">
+                المزامنة المحلية
+              </p>
 
-                <h1 className="mt-2 text-3xl font-extrabold sm:text-4xl">
-                  امسح QR الزائر
-                </h1>
-
-                <p className="mt-3 text-sm font-bold leading-7 text-white/65">
-                  {activeContext.eventTitle} — {activeContext.checkpointName}
-                </p>
-
-                <p className="mt-1 text-xs font-bold text-white/45">
-                  {activeContext.deviceLabel}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:justify-end">
-              <Badge variant={isOnline ? "success" : "warning"}>
-                {isOnline ? (
-                  <Wifi className="h-4 w-4" />
-                ) : (
-                  <WifiOff className="h-4 w-4" />
-                )}
-                {isOnline ? "متصل" : "Offline"}
-              </Badge>
-
-              <Badge variant={isReady ? "success" : "warning"}>
-                {isReady ? "جاهز للمسح" : "تجهيز..."}
-              </Badge>
-
-              <Badge variant={pendingCount > 0 ? "warning" : "success"}>
-                Pending: {pendingCount}
-              </Badge>
-
-              <Badge variant="gold">{scanType}</Badge>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_440px]">
-        <div className="space-y-5">
-          <div
-            className="border border-black/10 bg-white p-4 shadow-[0_24px_70px_rgba(0,0,0,0.08)] sm:p-6"
-            style={themedCardStyle}
-          >
-            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2
-                  className="text-2xl font-extrabold"
-                  style={{ color: theme.text }}
-                >
-                  الكاميرا
-                </h2>
-
-                <p
-                  className="mt-1 text-sm font-bold opacity-55"
-                  style={{ color: theme.text }}
-                >
-                  اضغط تشغيل الكاميرا ووجّهها نحو QR.
-                </p>
-              </div>
-
-              <Button variant="outline" onClick={refreshPendingCount}>
-                <RefreshCw className="h-4 w-4" />
-                تحديث
-              </Button>
-            </div>
-
-            {cameraError ? (
-              <div className="mb-5 flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold leading-7 text-amber-800">
-                <AlertTriangle className="mt-1 h-5 w-5 shrink-0" />
-                <span>{cameraError}</span>
-              </div>
-            ) : null}
-
-            {isCameraOpen ? (
-              <div
-                className="relative mb-5 overflow-hidden bg-black p-3"
-                style={themedCardStyle}
-              >
-                <video
-                  ref={videoRef}
-                  className="h-[58vh] max-h-[560px] min-h-[360px] w-full object-cover"
-                  style={{ borderRadius: theme.radius }}
-                  playsInline
-                  muted
-                />
-
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <div
-                    className="h-64 w-64 border-4 shadow-[0_0_0_999px_rgba(0,0,0,0.42)]"
-                    style={{
-                      borderRadius: theme.radius,
-                      borderColor: theme.primary,
-                    }}
-                  />
-                </div>
-
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-black/80 px-5 py-2 text-sm font-extrabold text-white">
-                  وجّه الكاميرا نحو QR
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={startCamera}
-                disabled={!isReady || isCameraStarting || isSubmitting}
-                className="mb-5 flex min-h-[380px] w-full items-center justify-center border-2 border-dashed transition disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-[460px]"
-                style={{
-                  ...themedSoftStyle,
-                  borderColor: `${theme.primary}55`,
-                }}
-              >
-                <div className="text-center">
-                  <div
-                    className="mx-auto mb-5 flex h-28 w-28 items-center justify-center bg-black shadow-xl"
-                    style={{
-                      borderRadius: theme.radius,
-                      color: theme.primary,
-                    }}
-                  >
-                    {isCameraStarting || isSubmitting ? (
-                      <Loader2 className="h-12 w-12 animate-spin" />
-                    ) : (
-                      <QrCode className="h-14 w-14" />
-                    )}
-                  </div>
-
-                  <p
-                    className="text-3xl font-extrabold"
-                    style={{ color: theme.text }}
-                  >
-                    تشغيل الكاميرا
-                  </p>
-
-                  <p
-                    className="mt-3 text-sm font-bold opacity-55"
-                    style={{ color: theme.text }}
-                  >
-                    اضغط هنا لبدء قراءة QR
-                  </p>
-                </div>
-              </button>
-            )}
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Button
-                size="lg"
-                disabled={!isReady || isCameraStarting || isSubmitting}
-                onClick={isCameraOpen ? stopCamera : startCamera}
-                variant={isCameraOpen ? "danger" : "secondary"}
-              >
-                <Camera className="h-5 w-5" />
-                {isCameraOpen ? "إيقاف الكاميرا" : "تشغيل الكاميرا"}
-              </Button>
-
-              <Button size="lg" variant="outline" onClick={startNewScan}>
-                <RefreshCw className="h-5 w-5" />
-                Scan جديد
-              </Button>
-            </div>
-          </div>
-
-          <section
-            className="border border-black/10 bg-white p-4 shadow-[0_24px_70px_rgba(0,0,0,0.06)] sm:p-6"
-            style={themedCardStyle}
-          >
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3
-                  className="text-lg font-extrabold"
-                  style={{ color: theme.text }}
-                >
-                  بحث عن زائر
-                </h3>
-
-                <p
-                  className="mt-1 text-xs font-bold opacity-55"
-                  style={{ color: theme.text }}
-                >
-                  ابحث بالاسم أو الهاتف أو البريد أو رقم التسجيل.
-                </p>
-              </div>
-
-              <Badge variant="gold">Manual Lookup</Badge>
-            </div>
-
-            <form
-              className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-              onSubmit={submitRegistrationSearch}
-            >
-              <input
-                value={registrationSearchInput}
-                onChange={(event) =>
-                  setRegistrationSearchInput(event.target.value)
-                }
-                placeholder="اكتب اسم الزائر أو رقمه أو بريده..."
-                className="h-12 w-full border border-black/10 bg-white px-4 text-sm font-bold outline-none transition placeholder:text-black/35 focus:ring-4"
-                style={
-                  {
-                    borderRadius: theme.radius,
-                    color: theme.text,
-                    "--tw-ring-color": `${theme.primary}1A`,
-                  } as CSSProperties
-                }
-              />
-
-              <Button
-                type="submit"
-                disabled={
-                  !activeContext.eventId || registrationsQuery.isFetching
-                }
-                style={themedButtonStyle}
-              >
-                {registrationsQuery.isFetching ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Search className="h-4 w-4" />
-                )}
-                بحث
-              </Button>
-            </form>
-
-            {registrationSearchEnabled && registrationsQuery.isError ? (
-              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold leading-7 text-red-700">
-                تعذر البحث عن التسجيلات. إذا ظهر 403، يجب السماح للـ STAFF
-                بالبحث ضمن فعاليته من الباك.
-              </div>
-            ) : null}
-
-            {registrationSearchEnabled &&
-            !registrationsQuery.isFetching &&
-            searchedRegistrations.length === 0 ? (
-              <div
-                className="mt-4 border border-black/10 p-4 text-center text-sm font-bold opacity-65"
-                style={themedSoftStyle}
-              >
-                لا توجد نتائج مطابقة.
-              </div>
-            ) : null}
-
-            {searchedRegistrations.length > 0 ? (
-              <div className="mt-4 grid gap-3">
-                {searchedRegistrations.map((registration) => {
-                  const hasToken = Boolean(
-                    getRegistrationQrToken(registration),
-                  );
-                  const hasImage = Boolean(
-                    getRegistrationQrImageUrl(registration),
-                  );
-
-                  return (
-                    <button
-                      key={registration.id}
-                      type="button"
-                      onClick={() => selectRegistration(registration)}
-                      className="w-full border border-black/10 bg-white p-4 text-right transition hover:-translate-y-0.5 hover:shadow-lg"
-                      style={{ borderRadius: theme.radius }}
-                    >
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                          <p
-                            className="truncate text-base font-extrabold"
-                            style={{ color: theme.text }}
-                          >
-                            {registration.fullName}
-                          </p>
-
-                          <p
-                            className="mt-1 truncate text-xs font-bold opacity-55"
-                            style={{ color: theme.text }}
-                          >
-                            {registration.phone || "—"}{" "}
-                            {registration.email
-                              ? `— ${registration.email}`
-                              : ""}
-                          </p>
-
-                          <p
-                            className="mt-1 truncate text-xs font-bold"
-                            style={{ color: theme.primary }}
-                          >
-                            {registration.publicId ||
-                              registration.externalId ||
-                              registration.id}
-                          </p>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
-                          <Badge
-                            variant={
-                              registration.status === "ACTIVE"
-                                ? "success"
-                                : "warning"
-                            }
-                          >
-                            {getStatusLabel(registration.status)}
-                          </Badge>
-
-                          <Badge
-                            variant={hasToken || hasImage ? "success" : "muted"}
-                          >
-                            {hasToken || hasImage ? "QR موجود" : "بدون QR"}
-                          </Badge>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </section>
-        </div>
-
-        <aside className="xl:sticky xl:top-24 xl:self-start">
-          <section
-            className="overflow-hidden border border-black/10 bg-white shadow-[0_24px_70px_rgba(0,0,0,0.08)]"
-            style={themedCardStyle}
-          >
-            {selectedRegistration && !scanResult && !lastOfflineSaved ? (
-              <div className="space-y-4 p-4">
-                <div
-                  className="border p-5 text-white"
-                  style={{
-                    borderRadius: `calc(${theme.radius} + 0.25rem)`,
-                    background: `linear-gradient(135deg, ${theme.primary}, ${theme.primaryHover})`,
-                  }}
-                >
-                  <p className="text-xs font-extrabold uppercase tracking-wide text-white/70">
-                    Visitor Lookup
-                  </p>
-
-                  <h2 className="mt-2 break-words text-3xl font-extrabold">
-                    {selectedRegistration.fullName}
-                  </h2>
-
-                  <p className="mt-2 text-sm font-bold text-white/75">
-                    {getStatusLabel(selectedRegistration.status)}
-                  </p>
-                </div>
-
-                <div className="space-y-3">
-                  <InfoCard
-                    icon={
-                      <Phone
-                        className="h-4 w-4"
-                        style={{ color: theme.primary }}
-                      />
-                    }
-                    label="الهاتف"
-                    value={selectedRegistration.phone || "—"}
-                    dir="ltr"
-                    theme={theme}
-                  />
-
-                  <InfoCard
-                    icon={
-                      <Mail
-                        className="h-4 w-4"
-                        style={{ color: theme.primary }}
-                      />
-                    }
-                    label="البريد الإلكتروني"
-                    value={selectedRegistration.email || "—"}
-                    dir="ltr"
-                    theme={theme}
-                  />
-
-                  <InfoCard
-                    icon={
-                      <UserRound
-                        className="h-4 w-4"
-                        style={{ color: theme.primary }}
-                      />
-                    }
-                    label="نوع الحضور"
-                    value={
-                      selectedRegistration.attendeeType?.nameAr ||
-                      selectedRegistration.attendeeType?.nameEn ||
-                      selectedRegistration.attendeeType?.code ||
-                      "—"
-                    }
-                    theme={theme}
-                  />
-
-                  <InfoCard
-                    icon={
-                      <QrCode
-                        className="h-4 w-4"
-                        style={{ color: theme.primary }}
-                      />
-                    }
-                    label="رقم التسجيل"
-                    value={
-                      selectedRegistration.publicId ||
-                      selectedRegistration.externalId ||
-                      selectedRegistration.id
-                    }
-                    dir="ltr"
-                    theme={theme}
-                  />
-
-                  {getRegistrationExtraFields(
-                    selectedRegistration,
-                    registrationFields,
-                  ).map((field) => (
-                    <InfoCard
-                      key={field.key}
-                      label={field.label}
-                      value={formatCustomValue(field.value)}
-                      theme={theme}
-                    />
-                  ))}
-                </div>
-
-                <div className="grid gap-3">
-                  <Button
-                    size="lg"
-                    disabled={
-                      !getRegistrationQrToken(selectedRegistration) ||
-                      isSubmitting ||
-                      !isReady
-                    }
-                    onClick={() =>
-                      scanSelectedRegistration(selectedRegistration)
-                    }
-                    style={themedButtonStyle}
-                  >
-                    {isSubmitting ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : (
-                      <ScanLine className="h-5 w-5" />
-                    )}
-                    تنفيذ Scan لهذا الزائر
-                  </Button>
-
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    onClick={() => setSelectedRegistration(null)}
-                  >
-                    إخفاء البطاقة
-                  </Button>
-                </div>
-
-                {!getRegistrationQrToken(selectedRegistration) ? (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-6 text-amber-800">
-                    تم العثور على الزائر، لكن الباك لم يرجع QR Token ضمن بيانات
-                    التسجيل. لعمل Scan مباشر من البحث، يجب إرجاع QR Token أو
-                    Active QR مع التسجيل.
-                  </div>
-                ) : null}
-              </div>
-            ) : !scanResult && !lastOfflineSaved ? (
-              <div className="flex min-h-[620px] items-center justify-center p-6">
-                <div className="max-w-sm text-center">
-                  <div
-                    className="mx-auto flex h-24 w-24 items-center justify-center"
-                    style={{
-                      borderRadius: theme.radius,
-                      backgroundColor: `${theme.primary}1A`,
-                      color: theme.primary,
-                    }}
-                  >
-                    <ScanLine className="h-12 w-12" />
-                  </div>
-
-                  <h2
-                    className="mt-5 text-2xl font-extrabold"
-                    style={{ color: theme.text }}
-                  >
-                    بانتظار أول Scan
-                  </h2>
-
-                  <p
-                    className="mt-3 text-sm font-bold leading-7 opacity-55"
-                    style={{ color: theme.text }}
-                  >
-                    بعد قراءة QR أو اختيار زائر من البحث ستظهر البيانات هنا.
-                  </p>
-                </div>
-              </div>
-            ) : lastOfflineSaved ? (
-              <div className="p-5">
-                <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-6 text-center">
-                  <WifiOff className="mx-auto h-14 w-14 text-amber-700" />
-
-                  <h2 className="mt-4 text-3xl font-extrabold text-amber-800">
-                    محفوظ محليًا
-                  </h2>
-
-                  <p className="mt-3 text-sm font-bold leading-7 text-amber-800/70">
-                    سيتم إرسال العملية عند عودة الاتصال والمزامنة.
-                  </p>
-
-                  <Button
-                    className="mt-6 w-full"
-                    size="lg"
-                    onClick={startNewScan}
-                  >
-                    <RefreshCw className="h-5 w-5" />
-                    Scan جديد
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <VisitorScanBadge
-                allowed={allowed}
-                visitor={visitor}
-                theme={theme}
-                eventTitle={activeContext.eventTitle}
-                checkpointName={activeContext.checkpointName}
-                scanType={scanType}
-                resultMessage={getResultMessage(scanResult)}
-                resultTime={formatDateTime(getResultTime(scanResult))}
-                extraFields={scanExtraFields}
-                qrImageUrl={scanQrImageUrl}
-                qrToken={scanQrToken}
-                isGeneratingQr={
-                  createQrImageMutation.isPending ||
-                  generateQrMutation.isPending ||
-                  registrationQrQuery.isFetching
-                }
-                onGenerateQr={() => {
-                  if (!scannedRegistrationId) {
-                    toast.error("لا يوجد رقم تسجيل لتوليد QR");
-                    return;
-                  }
-
-                  generateQrMutation.mutate(scannedRegistrationId, {
-                    onSuccess: () => {
-                      createQrImageMutation.mutate(scannedRegistrationId);
-                    },
-                  });
-                }}
-                onNewScan={startNewScan}
-                onClear={clearResult}
-              />
-            )}
-          </section>
-        </aside>
-      </section>
-    </div>
-  );
-}
-
-function InfoCard({
-  icon,
-  label,
-  value,
-  theme,
-  dir,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-  value: string;
-  theme: ReturnType<typeof getTheme>;
-  dir?: "rtl" | "ltr";
-}) {
-  return (
-    <div
-      className="bg-white p-4 shadow-sm"
-      style={{
-        borderRadius: theme.radius,
-        color: theme.text,
-      }}
-    >
-      <div className="flex items-center gap-2 text-xs font-bold opacity-45">
-        {icon}
-        {label}
-      </div>
-
-      <p
-        dir={dir}
-        className={`mt-2 break-words text-base font-extrabold ${
-          dir === "ltr" ? "text-left" : ""
-        }`}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function VisitorScanBadge({
-  allowed,
-  visitor,
-  theme,
-  eventTitle,
-  checkpointName,
-  scanType,
-  resultMessage,
-  resultTime,
-  extraFields,
-  qrImageUrl,
-  qrToken,
-  isGeneratingQr,
-  onGenerateQr,
-  onNewScan,
-  onClear,
-}: {
-  allowed: boolean;
-  visitor: VisitorInfo;
-  theme: ReturnType<typeof getTheme>;
-  eventTitle: string;
-  checkpointName: string;
-  scanType: ScanType;
-  resultMessage: string;
-  resultTime: string;
-  extraFields: { key: string; label: string; value: unknown }[];
-  qrImageUrl: string;
-  qrToken: string;
-  isGeneratingQr: boolean;
-  onGenerateQr: () => void;
-  onNewScan: () => void;
-  onClear: () => void;
-}) {
-  const statusBg = allowed ? "#059669" : "#DC2626";
-  const statusText = allowed ? "مسموح بالدخول" : "مرفوض";
-
-  function printBadge() {
-    window.print();
-  }
-
-  function downloadQr() {
-    if (!qrImageUrl) return;
-
-    const link = document.createElement("a");
-    link.href = qrImageUrl;
-    link.download = `${visitor.publicId || "visitor-qr"}.png`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  }
-
-  return (
-    <div className="bg-white">
-      <div className="p-4 print:p-0">
-        <div
-          id="visitor-print-badge"
-          className="overflow-hidden border border-black/10 bg-white shadow-[0_24px_70px_rgba(0,0,0,0.08)] print:shadow-none"
-          style={{
-            borderRadius: `calc(${theme.radius} + 0.5rem)`,
-            color: theme.text,
-          }}
-        >
-          <div
-            className="p-5 text-white"
-            style={{
-              background: `linear-gradient(135deg, ${theme.primary}, ${theme.primaryHover})`,
-            }}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-extrabold uppercase tracking-wide text-white/70">
-                  {eventTitle}
-                </p>
-
-                <h2 className="mt-2 text-3xl font-black leading-tight">
-                  {visitor.fullName}
-                </h2>
-
-                <p className="mt-2 text-sm font-bold text-white/75">
-                  {checkpointName}
-                </p>
-              </div>
-
-              <div
-                className="shrink-0 rounded-2xl px-3 py-2 text-center text-xs font-black text-white"
-                style={{ backgroundColor: statusBg }}
-              >
-                {allowed ? "ALLOWED" : "DENIED"}
-              </div>
-            </div>
-          </div>
-
-          <div className="p-4" style={{ backgroundColor: theme.background }}>
-            <div
-              className="mb-4 rounded-3xl border p-4 text-center"
-              style={{
-                borderColor: allowed ? "#10B98155" : "#EF444455",
-                backgroundColor: allowed ? "#ECFDF5" : "#FEF2F2",
-                color: allowed ? "#047857" : "#B91C1C",
-              }}
-            >
-              <div className="flex items-center justify-center gap-2">
-                {allowed ? (
-                  <CheckCircle2 className="h-7 w-7" />
-                ) : (
-                  <XCircle className="h-7 w-7" />
-                )}
-
-                <p className="text-2xl font-black">{statusText}</p>
-              </div>
-
-              <p className="mt-2 text-sm font-bold leading-6">
-                {resultMessage}
+              <p className="mt-1 text-xs font-bold text-[#2F3137]/50">
+                العمليات غير المرفوعة: {pendingCount}
               </p>
             </div>
 
-            <div className="grid gap-3">
-              <BadgeInfoRow label="الهاتف" value={visitor.phone} dir="ltr" />
-              <BadgeInfoRow
-                label="البريد الإلكتروني"
-                value={visitor.email}
-                dir="ltr"
-              />
-              <BadgeInfoRow
-                label="رقم التسجيل"
-                value={visitor.publicId}
-                dir="ltr"
-              />
-              <BadgeInfoRow label="نوع الحركة" value={scanType} />
-              <BadgeInfoRow label="نوع الحضور" value={visitor.attendeeType} />
-              <BadgeInfoRow label="وقت المسح" value={resultTime} />
-
-              {extraFields.map((field) => (
-                <BadgeInfoRow
-                  key={field.key}
-                  label={field.label}
-                  value={formatCustomValue(field.value)}
-                />
-              ))}
-            </div>
-
-            <div className="mt-4 rounded-3xl bg-white p-4 text-center shadow-sm">
-              <p
-                className="mb-3 text-sm font-black"
-                style={{ color: theme.text }}
-              >
-                QR الخاص بالزائر
-              </p>
-
-              {qrImageUrl ? (
-                <img
-                  src={qrImageUrl}
-                  alt="Visitor QR"
-                  className="mx-auto h-56 w-56 rounded-2xl bg-white object-contain p-2"
-                />
-              ) : qrToken ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold leading-6 text-amber-800">
-                  يوجد QR Token لكن لا توجد صورة QR. اضغط توليد / تحديث QR.
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold leading-6 text-amber-800">
-                  لم يتم إرجاع QR لهذا التسجيل.
-                </div>
-              )}
-
-              {qrToken ? (
-                <p
-                  dir="ltr"
-                  className="mx-auto mt-3 max-w-[260px] truncate text-xs font-bold opacity-50"
-                >
-                  {qrToken}
-                </p>
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 print:hidden">
-          <Button
-            size="lg"
-            disabled={isGeneratingQr}
-            onClick={onGenerateQr}
-            style={{
-              borderRadius: theme.radius,
-              backgroundColor: theme.primary,
-            }}
-          >
-            {isGeneratingQr ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <QrCode className="h-5 w-5" />
-            )}
-            توليد / تحديث QR
-          </Button>
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
             <Button
-              size="lg"
               variant="outline"
-              disabled={!qrImageUrl}
-              onClick={downloadQr}
+              disabled={!isOnline || isSyncingQueue || pendingCount === 0}
+              onClick={syncOfflineQueue}
             >
-              <Download className="h-5 w-5" />
-              تحميل QR
-            </Button>
-
-            <Button size="lg" variant="outline" onClick={printBadge}>
-              <Printer className="h-5 w-5" />
-              طباعة البادج
-            </Button>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-            <Button size="lg" onClick={onNewScan}>
-              <RefreshCw className="h-5 w-5" />
-              Scan جديد
-            </Button>
-
-            <Button
-              size="lg"
-              variant={allowed ? "outline" : "danger"}
-              onClick={onClear}
-            >
-              {allowed ? (
-                <ShieldCheck className="h-5 w-5" />
+              {isSyncingQueue ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <ShieldAlert className="h-5 w-5" />
+                <RefreshCw className="h-4 w-4" />
               )}
-              إخفاء النتيجة
+              مزامنة الآن
             </Button>
-          </div>
+          </section>
+
+          <section className="grid gap-5">
+            <StaffCameraPanel
+              theme={theme}
+              isReady={isReady}
+              isSubmitting={isSubmittingScan}
+              isCameraOpen={isCameraOpen}
+              isCameraStarting={isCameraStarting}
+              cameraError={cameraError}
+              videoRef={videoRef}
+              onStart={startCamera}
+              onStop={stopCamera}
+              onRefresh={refreshPendingCount}
+              onNewScan={startNewScan}
+            />
+
+            {lastOfflineSaved ? (
+              <section
+                className="border border-amber-200 bg-amber-50 p-4 text-center text-sm font-bold leading-7 text-amber-800"
+                style={{ borderRadius: theme.radius }}
+              >
+                تم حفظ عملية المسح محليًا بسبب عدم وجود اتصال. سيتم رفعها عند
+                المزامنة.
+              </section>
+            ) : null}
+
+            <StaffVisitorsPanel
+              theme={theme}
+              searchInput={visitorSearchInput}
+              setSearchInput={setVisitorSearchInput}
+              onSearch={submitVisitorSearch}
+              isFetching={isCachingVisitors}
+              isError={false}
+              searchEnabled={visitorSearchEnabled}
+              visitors={searchedVisitors}
+              registrationFields={registrationFields}
+              onCreate={openCreateModal}
+              onPrint={printVisitorBadge}
+              onGenerateQr={showVisitorQr}
+              onScan={scanVisitorFromTable}
+              generatingVisitorId={showingVisitorQrId}
+              scanningVisitorId={scanningVisitorId}
+              printingVisitorId={printingVisitorId}
+            />
+
+            {displayVisitor ? (
+              <section
+                className="overflow-hidden  shadow-[0_24px_70px_rgba(0,0,0,0.08)]"
+                style={{
+                  borderRadius: `calc(${theme.radius} + 0.5rem)`,
+                }}
+              >
+                <StaffVisitorCard
+                  source={visitorSource}
+                  theme={theme}
+                  visitor={displayVisitor}
+                  eventTitle={activeContext.eventTitle}
+                  checkpointName={activeContext.checkpointName}
+                  qrImageUrl={cardQrImageUrl}
+                  qrToken={cardQrToken}
+                  extraFields={displayExtraFields}
+                  isGeneratingQr={showingVisitorQrId === displayRegistrationId}
+                  isSubmittingScan={isSubmittingScan}
+                  isPrintingBadge={printingVisitorId === displayRegistrationId}
+                  canScan={Boolean(
+                    (cardQrToken || displayRegistrationId) && isReady,
+                  )}
+                  onScan={visitorSource === "scan" ? null : scanDisplayVisitor}
+                  onGenerateQr={generateQrForDisplayVisitor}
+                  onPrintBadge={printDisplayVisitorBadge}
+                  onClear={clearScanResult}
+                />
+              </section>
+            ) : null}
+          </section>
         </div>
-      </div>
-    </div>
-  );
-}
+      </main>
 
-function BadgeInfoRow({
-  label,
-  value,
-  dir,
-}: {
-  label: string;
-  value: string;
-  dir?: "rtl" | "ltr";
-}) {
-  return (
-    <div className="rounded-2xl bg-white p-4 shadow-sm">
-      <p className="text-xs font-bold text-black/40">{label}</p>
+      <StaffCreateVisitorModal
+        open={createModalOpen}
+        theme={theme}
+        attendeeTypes={attendeeTypes}
+        attendeeTypeId={registerAttendeeTypeId}
+        form={registerForm}
+        customFields={registerCustomFields}
+        visibleFields={visibleRegisterFields}
+        errors={registerErrors}
+        isSubmitting={isRegistering}
+        onClose={closeCreateModal}
+        onSubmit={submitRegisterForm}
+        onAttendeeTypeChange={(value) => {
+          setRegisterAttendeeTypeId(value);
+          setRegisterCustomFields({});
+          setRegisterErrors({});
+        }}
+        onFormChange={updateRegisterForm}
+        onCustomChange={updateRegisterCustomField}
+      />
 
-      <p
-        dir={dir}
-        className={`mt-1 break-words text-lg font-black text-[#333] ${
-          dir === "ltr" ? "text-left" : ""
-        }`}
-      >
-        {value || "—"}
-      </p>
-    </div>
+      <StaffBadgePreviewModal
+        open={badgePreviewOpen}
+        theme={theme}
+        data={badgePreviewData}
+        visitor={badgePreviewVisitor}
+        eventTitle={activeContext.eventTitle}
+        onClose={() => {
+          setBadgePreviewOpen(false);
+          setBadgePreviewData(null);
+          setBadgePreviewVisitor(null);
+        }}
+      />
+    </>
   );
 }

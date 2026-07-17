@@ -16,6 +16,7 @@ import {
   MapPinned,
   MonitorSmartphone,
   QrCode,
+  ScanLine,
   Settings,
   ShieldCheck,
   Tags,
@@ -65,6 +66,7 @@ const navigationGroups = [
       },
       { title: "جلسات الموظفين", href: "/staff-sessions", icon: Clock3 },
       { title: "إدارة QR", href: "/qr", icon: QrCode },
+      { title: "تتبع الزوار", href: "/scan-tracking", icon: ScanLine },
     ],
   },
   {

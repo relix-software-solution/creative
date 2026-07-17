@@ -29,6 +29,62 @@ export type EventBranding = {
   updatedAt?: string;
 };
 
+export type BadgeSelectedFieldSource = "FIXED" | "CUSTOM" | "SYSTEM";
+
+export type BadgeSelectedField = {
+  key: string;
+  source: BadgeSelectedFieldSource;
+  label: string;
+  visible: boolean;
+};
+
+export type BadgeTemplateLayout = {
+  fields: Record<
+    string,
+    {
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+      fontSize?: number;
+    }
+  >;
+};
+
+export type BadgeTemplate = {
+  id: string;
+  eventId: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  backgroundImageUrl?: string | null;
+  colors?: {
+    primary?: string | null;
+    text?: string | null;
+    background?: string | null;
+  } | null;
+  selectedFields?: BadgeSelectedField[] | null;
+  layout?: BadgeTemplateLayout | null;
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type BadgeTemplatePayload = {
+  eventId?: string;
+  name?: string;
+  widthMm?: number;
+  heightMm?: number;
+  colors?: {
+    primary?: string;
+    text?: string;
+    background?: string;
+  };
+  selectedFields?: BadgeSelectedField[];
+  layout?: BadgeTemplateLayout;
+  backgroundImage?: File | null;
+};
+
 export type EventItem = {
   id: string;
   clientId: string;
@@ -48,6 +104,9 @@ export type EventItem = {
   isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
+
+  badgeTemplate?: BadgeTemplate | null;
+  badge?: BadgeTemplate | null;
 
   client?: {
     id: string;
@@ -108,4 +167,28 @@ export type EventsListResponse = {
 export type EventMutationResponse = {
   event: EventItem;
   branding?: EventBranding;
+};
+
+export type BadgeFieldSource = "FIXED" | "CUSTOM" | "SYSTEM";
+
+export type BadgeFieldType =
+  | "TEXT"
+  | "EMAIL"
+  | "PHONE"
+  | "NUMBER"
+  | "DATE"
+  | "QR"
+  | string;
+
+export type BadgeAvailableField = {
+  key: string;
+  labelAr: string;
+  labelEn: string;
+  source: BadgeFieldSource;
+  type: BadgeFieldType;
+  required: boolean;
+};
+
+export type BadgeAvailableFieldsResponse = {
+  fields: BadgeAvailableField[];
 };

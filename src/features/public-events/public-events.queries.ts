@@ -31,8 +31,17 @@ function getErrorMessage(error: unknown) {
 
     const message = response.response?.data?.message;
 
-    if (Array.isArray(message)) return message[0] ?? "حدث خطأ غير متوقع";
-    if (typeof message === "string") return message;
+    if (Array.isArray(message)) {
+      return message[0] ?? "حدث خطأ غير متوقع";
+    }
+
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  }
+
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
   }
 
   return "حدث خطأ غير متوقع";
@@ -45,26 +54,21 @@ export function usePublicEvents(params: PublicEventsListParams = {}) {
   });
 }
 
-export function usePublicEvent(id: string) {
+export function usePublicEvent(id: string, enabled = true) {
   return useQuery({
     queryKey: publicEventsKeys.detail(id),
     queryFn: () => getPublicEvent(id),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && enabled,
   });
 }
 
 export function useRegisterToPublicEvent(eventId: string) {
   return useMutation({
-    mutationFn: async (payload: PublicRegisterPayload) => {
-      const response = await registerToPublicEvent(eventId, payload);
-
-      console.log("PUBLIC REGISTER RESPONSE:", response);
-
-      return response;
-    },
+    mutationFn: (payload: PublicRegisterPayload) =>
+      registerToPublicEvent(eventId, payload),
 
     onSuccess: () => {
-      toast.success("تم إرسال طلب التسجيل بنجاح");
+      toast.success("تم التسجيل بنجاح");
     },
 
     onError: (error) => {
