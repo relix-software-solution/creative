@@ -355,13 +355,6 @@ export default function PublicRegistrationSuccessPage() {
     successData?.digitalTicket?.url,
   ]);
 
-  const companyWhatsappNumber = useMemo(() => {
-    const configuredNumber =
-      process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || fallbackCompanyWhatsappNumber;
-
-    return normalizeWhatsappNumber(configuredNumber);
-  }, []);
-
   const ticketRequestToken =
     successData?.whatsappRequest?.ticketRequestToken?.trim() || "";
 
@@ -369,44 +362,7 @@ export default function PublicRegistrationSuccessPage() {
     successData?.whatsappRequest?.expiresAt,
   );
 
-  /**
-   * لا نستخدم whatsappRequest.url القادم من الباك.
-   *
-   * نحن نبني رسالة WhatsApp هنا داخل الفرونت،
-   * ونضع داخلها ticketRequestToken حتى يستطيع
-   * Webhook في الباك التحقق من الطلب وإرسال الصورة.
-   */
-  const whatsappMessage = useMemo(() => {
-    const lines = [
-      `الاسم: ${successData?.fullName || "—"}`,
-      `رقم التسجيل: ${registrationReference}`,
-    ];
-
-    if (eventTitle) {
-      lines.push(`الفعالية: ${eventTitle}`);
-    }
-
-    return lines.join("\n");
-  }, [eventTitle, registrationReference, successData?.fullName]);
-
-  const whatsappRequestUrl = useMemo(() => {
-    if (
-      !companyWhatsappNumber ||
-      whatsappRequestExpired ||
-      successData?.whatsappRequest?.enabled === false
-    ) {
-      return "";
-    }
-
-    return `https://wa.me/${companyWhatsappNumber}?text=${encodeURIComponent(
-      whatsappMessage,
-    )}`;
-  }, [
-    companyWhatsappNumber,
-    whatsappMessage,
-    whatsappRequestExpired,
-    successData?.whatsappRequest?.enabled,
-  ]);
+  const whatsappRequestUrl = successData?.whatsappRequest?.url?.trim() || "";
 
   const extraFields = useMemo(() => {
     const attendeeTypeId =

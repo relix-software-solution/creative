@@ -61,7 +61,6 @@ type CountryOption = {
   country: CountryCode;
   name: string;
   callingCode: string;
-  flag: string;
 };
 
 type PhoneValidationResult =
@@ -116,7 +115,6 @@ const COUNTRY_OPTIONS: CountryOption[] = getCountries()
     country,
     name: getCountryName(country),
     callingCode: getCountryCallingCode(country),
-    flag: getCountryFlag(country),
   }))
   .sort((first, second) =>
     first.name.localeCompare(second.name, "ar", {
@@ -1336,8 +1334,11 @@ function CountryPhoneInput({
 
   useEffect(() => {
     if (!isOpen) {
-      setSearchValue("");
-      return;
+      const timer = window.setTimeout(() => {
+        setSearchValue("");
+      }, 0);
+
+      return () => window.clearTimeout(timer);
     }
 
     const timer = window.setTimeout(() => {
@@ -1387,15 +1388,22 @@ function CountryPhoneInput({
           aria-haspopup="listbox"
           aria-expanded={isOpen}
           onClick={() => setIsOpen((current) => !current)}
-          className="flex w-[140px] shrink-0 items-center gap-2 border-r border-black/10 px-3 text-left outline-none transition hover:bg-black/[0.025] sm:w-[170px]"
+          className="flex w-[150px] shrink-0 items-center gap-2 border-r border-black/10 px-3 text-left outline-none transition hover:bg-black/[0.025] sm:w-[180px]"
           style={{
             borderTopLeftRadius: theme.radius,
             borderBottomLeftRadius: theme.radius,
             color: theme.text,
           }}
         >
-          <span className="shrink-0 text-lg leading-none">
-            {selectedCountry.flag}
+          <span
+            dir="ltr"
+            className="flex h-8 min-w-10 shrink-0 items-center justify-center rounded-xl px-2 text-xs font-extrabold"
+            style={{
+              backgroundColor: `${theme.primary}14`,
+              color: theme.primary,
+            }}
+          >
+            {selectedCountry.country}
           </span>
 
           <span className="min-w-0 flex-1">
@@ -1513,8 +1521,21 @@ function CountryPhoneInput({
                       color: theme.text,
                     }}
                   >
-                    <span className="w-7 shrink-0 text-center text-lg">
-                      {option.flag}
+                    <span
+                      dir="ltr"
+                      className="flex h-9 min-w-11 shrink-0 items-center justify-center rounded-xl px-2 text-xs font-extrabold"
+                      style={{
+                        backgroundColor:
+                          option.country === country
+                            ? `${theme.primary}18`
+                            : "rgba(0,0,0,0.04)",
+                        color:
+                          option.country === country
+                            ? theme.primary
+                            : theme.text,
+                      }}
+                    >
+                      {option.country}
                     </span>
 
                     <span className="min-w-0 flex-1">
@@ -1529,7 +1550,7 @@ function CountryPhoneInput({
                         dir="ltr"
                         className="mt-0.5 block text-left text-[11px] font-bold opacity-45"
                       >
-                        {option.country} · +{option.callingCode}
+                        +{option.callingCode}
                       </span>
                     </span>
 
