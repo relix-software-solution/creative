@@ -58,7 +58,14 @@ export function usePublicEvent(id: string, enabled = true) {
   return useQuery({
     queryKey: publicEventsKeys.detail(id),
     queryFn: () => getPublicEvent(id),
+
     enabled: Boolean(id) && enabled,
+
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+
+    networkMode: "online",
   });
 }
 

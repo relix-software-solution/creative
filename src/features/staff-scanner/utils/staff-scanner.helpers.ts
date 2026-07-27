@@ -22,19 +22,24 @@ const fallbackTheme: StaffScannerTheme = {
 };
 
 function getBackendOrigin() {
-  return (
+  const configuredOrigin =
     process.env.NEXT_PUBLIC_BACKEND_ORIGIN ||
     process.env.NEXT_PUBLIC_API_ORIGIN ||
-    "http://localhost:3000"
-  ).replace(/\/$/, "");
+    process.env.NEXT_PUBLIC_API_BASE_URL;
+
+  if (configuredOrigin) {
+    return configuredOrigin.replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    return window.location.origin.replace(/\/$/, "");
+  }
+
+  return "";
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function asString(value: unknown) {
-  return typeof value === "string" ? value : "";
 }
 
 function firstText(...values: unknown[]) {
@@ -62,35 +67,32 @@ export function resolveAssetUrl(value?: string | null) {
 
   if (/^https?:\/\//i.test(value)) return value;
 
+  const backendOrigin = getBackendOrigin();
+
   if (value.startsWith("/")) {
-    return `${getBackendOrigin()}${value}`;
+    return backendOrigin ? `${backendOrigin}${value}` : value;
   }
 
-  return `${getBackendOrigin()}/${value}`;
+  return backendOrigin ? `${backendOrigin}/${value}` : `/${value}`;
 }
 
 export function getPublicEventInfo(
   data?: StaffScannerPublicEventResponse,
 ): PublicEvent | null {
   if (!data) return null;
-
   if (data.event) return data.event;
-
   if (data.data?.event) return data.data.event;
-
   return data as PublicEvent;
 }
 
 export function getTheme(data?: StaffScannerPublicEventResponse) {
   const event = getPublicEventInfo(data);
-
   const branding =
     data?.branding ||
     data?.data?.branding ||
     event?.branding ||
     event?.eventBranding ||
     null;
-
   const theme = branding?.theme;
 
   return {
@@ -104,7 +106,6 @@ export function getTheme(data?: StaffScannerPublicEventResponse) {
 
 export function getLogoUrl(data?: StaffScannerPublicEventResponse) {
   const event = getPublicEventInfo(data);
-
   const branding =
     data?.branding ||
     data?.data?.branding ||
@@ -117,7 +118,6 @@ export function getLogoUrl(data?: StaffScannerPublicEventResponse) {
 
 export function getBackgroundUrl(data?: StaffScannerPublicEventResponse) {
   const event = getPublicEventInfo(data);
-
   const branding =
     data?.branding ||
     data?.data?.branding ||
@@ -154,13 +154,32 @@ export function getVisibleFields(
   fields: PublicRegistrationField[],
   attendeeTypeId: string,
 ) {
-  return fields
+  const eligible = fields
     .filter((field) => {
       if (field.isActive === false) return false;
 
-      return field.attendeeTypeId === attendeeTypeId;
+      return (
+        field.attendeeTypeId == null || field.attendeeTypeId === attendeeTypeId
+      );
     })
-    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    .sort((left, right) => {
+      const scopeDiff =
+        Number(left.attendeeTypeId != null) -
+        Number(right.attendeeTypeId != null);
+
+      if (scopeDiff !== 0) return scopeDiff;
+
+      return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+    });
+  const fieldsByKey = new Map<string, PublicRegistrationField>();
+
+  for (const field of eligible) {
+    fieldsByKey.set(field.key, field);
+  }
+
+  return Array.from(fieldsByKey.values()).sort(
+    (left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0),
+  );
 }
 
 export function getEventTitle(assignment?: StaffAssignment | null) {
@@ -171,7 +190,7 @@ export function getCheckpointName(assignment?: StaffAssignment | null) {
   return (
     assignment?.checkpoint?.nameAr ||
     assignment?.checkpoint?.nameEn ||
-    "بوابة الدخول"
+    "نقطة المسح"
   );
 }
 
@@ -195,7 +214,6 @@ export function getDeviceApiKey(assignment?: StaffAssignment | null) {
     assignmentRecord.deviceApiKey,
     assignmentRecord.rawDeviceApiKey,
     assignmentRecord.apiKey,
-
     deviceRecord?.rawApiKey,
     deviceRecord?.apiKey,
     deviceRecord?.deviceApiKey,
@@ -206,12 +224,39 @@ export function getDeviceApiKey(assignment?: StaffAssignment | null) {
   return key || null;
 }
 
-export function getDefaultScanType(assignment?: StaffAssignment | null) {
-  const type = assignment?.checkpoint?.type || "";
+export function getDefaultScanType(
+  assignment?: StaffAssignment | null,
+  fallbackCheckpointType?: string | null,
+) {
+  /*
+   * عند Online نأخذ النوع من Assignment.
+   * عند Refresh أوفلاين نأخذه من السياق المحفوظ.
+   */
+  const type = (assignment?.checkpoint?.type || fallbackCheckpointType || "")
+    .trim()
+    .toUpperCase();
 
-  if (type.toUpperCase().includes("EXIT")) return "EXIT" satisfies ScanType;
+  if (type === "ENTRY") {
+    return "ENTRY" satisfies ScanType;
+  }
 
-  return "ENTRY" satisfies ScanType;
+  if (type === "EXIT") {
+    return "EXIT" satisfies ScanType;
+  }
+
+  if (type === "BOOTH" || type === "BOOTH_VISIT") {
+    return "BOOTH_VISIT" satisfies ScanType;
+  }
+
+  if (type === "SESSION_ROOM" || type === "SESSION_ATTENDANCE") {
+    return "SESSION_ATTENDANCE" satisfies ScanType;
+  }
+
+  if (type === "VIP_AREA" || type === "VIP_ACCESS") {
+    return "VIP_ACCESS" satisfies ScanType;
+  }
+
+  return "CHECKPOINT" satisfies ScanType;
 }
 
 export function createOperationId() {
@@ -239,7 +284,7 @@ export function extractQrToken(value: string) {
       );
     }
   } catch {
-    // raw QR token
+    // Raw QR token.
   }
 
   return text;
@@ -247,9 +292,7 @@ export function extractQrToken(value: string) {
 
 export function getQrTokenFromQrResponse(value: unknown): string {
   if (!value) return "";
-
   if (typeof value === "string") return value;
-
   if (!isObject(value)) return "";
 
   const direct = firstText(
@@ -261,15 +304,13 @@ export function getQrTokenFromQrResponse(value: unknown): string {
 
   if (direct) return direct;
 
-  const qr = value.qr;
-  if (qr) {
-    const nested = getQrTokenFromQrResponse(qr);
+  if (value.qr) {
+    const nested = getQrTokenFromQrResponse(value.qr);
     if (nested) return nested;
   }
 
-  const data = value.data;
-  if (data) {
-    const nested = getQrTokenFromQrResponse(data);
+  if (value.data) {
+    const nested = getQrTokenFromQrResponse(value.data);
     if (nested) return nested;
   }
 
@@ -292,15 +333,13 @@ export function getQrImageFromQrResponse(value: unknown): string {
 
   if (direct) return resolveAssetUrl(direct);
 
-  const qr = value.qr;
-  if (qr) {
-    const nested = getQrImageFromQrResponse(qr);
+  if (value.qr) {
+    const nested = getQrImageFromQrResponse(value.qr);
     if (nested) return nested;
   }
 
-  const data = value.data;
-  if (data) {
-    const nested = getQrImageFromQrResponse(data);
+  if (value.data) {
+    const nested = getQrImageFromQrResponse(value.data);
     if (nested) return nested;
   }
 
@@ -323,20 +362,10 @@ export function getRegistrationCandidate(scanResult?: ScanResult | null) {
 
 export function getRegistrationIdFromScan(scanResult?: ScanResult | null) {
   const registration = getRegistrationCandidate(scanResult);
-
-  const qr = scanResult?.qr as
-    | {
-        registrationId?: string | null;
-      }
-    | null
-    | undefined;
-
-  const dataQr = scanResult?.data?.qr as
-    | {
-        registrationId?: string | null;
-      }
-    | null
-    | undefined;
+  const qr = scanResult?.qr as { registrationId?: string | null } | null;
+  const dataQr = scanResult?.data?.qr as {
+    registrationId?: string | null;
+  } | null;
 
   return registration?.id || qr?.registrationId || dataQr?.registrationId || "";
 }
@@ -345,35 +374,29 @@ export function getVisitorInfoFromScan(
   scanResult: ScanResult,
 ): StaffScannerVisitor {
   const registration = getRegistrationCandidate(scanResult);
-
   const qrToken = getQrTokenFromQrResponse(scanResult);
   const qrImageUrl = getQrImageFromQrResponse(scanResult);
-
   const attendeeType = registration?.attendeeType;
 
   return {
     id: registration?.id || "",
     registrationId: registration?.id || "",
     publicId: registration?.publicId || null,
-
     fullName:
       registration?.fullName ||
       registration?.name ||
       registration?.visitorName ||
       registration?.attendeeName ||
       "زائر",
-
     phone: registration?.phone || registration?.mobile || null,
     email: registration?.email || null,
     status: registration?.status || scanResult.status || null,
-
     attendeeTypeName:
       attendeeType?.nameAr ||
       attendeeType?.nameEn ||
       attendeeType?.code ||
       null,
     attendeeTypeCode: attendeeType?.code || null,
-
     customFields: {
       ...(registration?.customFields ?? {}),
       ...(registration?.companyName || registration?.company
@@ -383,7 +406,6 @@ export function getVisitorInfoFromScan(
         ? { jobTitle: registration.jobTitle || registration.position }
         : {}),
     },
-
     qrToken,
     qrImageUrl,
   };
@@ -392,44 +414,49 @@ export function getVisitorInfoFromScan(
 export function getVisitorInfoFromStaffVisitor(
   visitor: StaffVisitor,
 ): StaffScannerVisitor {
-  const qrToken = getVisitorQrToken(visitor);
-  const qrImageUrl = getVisitorQrImageUrl(visitor);
-
   return {
     id: visitor.id,
     registrationId: visitor.id,
     publicId: visitor.publicId || null,
-
     fullName: visitor.fullName,
     phone: visitor.phone || null,
     email: visitor.email || null,
     status: visitor.status || null,
-
     attendeeTypeName:
       visitor.attendeeType?.nameAr ||
       visitor.attendeeType?.nameEn ||
       visitor.attendeeType?.code ||
       null,
-
     attendeeTypeCode: visitor.attendeeType?.code || null,
-    customFields: visitor.customFields || null,
-
-    qrToken,
-    qrImageUrl,
+    customFields: {
+      ...(visitor.customFields || {}),
+    },
+    qrToken: getVisitorQrToken(visitor),
+    qrImageUrl: getVisitorQrImageUrl(visitor),
   };
 }
 
 export function getVisitorQrToken(visitor?: StaffVisitor | null) {
-  if (!visitor) return "";
+  if (!visitor) {
+    return "";
+  }
 
-  const direct = typeof visitor.qrToken === "string" ? visitor.qrToken : "";
+  const offlineSignedQr = visitor.offlineSignedQr?.trim() || "";
 
-  if (direct) return direct;
+  const direct =
+    typeof visitor.qrToken === "string" ? visitor.qrToken.trim() : "";
 
-  return (
+  const nested =
     getQrTokenFromQrResponse(visitor.qrToken) ||
-    getQrTokenFromQrResponse(visitor.qr)
-  );
+    getQrTokenFromQrResponse(visitor.qr);
+
+  const canonicalQrToken = visitor.canonicalQrToken?.trim() || "";
+
+  /*
+   * نعطي الأولوية للـOffline QR لأنه قد يكون
+   * مطبوعًا مسبقًا على البادج.
+   */
+  return offlineSignedQr || direct || nested || canonicalQrToken;
 }
 
 export function getVisitorQrImageUrl(visitor?: StaffVisitor | null) {
@@ -448,29 +475,25 @@ export function getExtraFields(
   customFields: Record<string, unknown>,
   registrationFields: PublicRegistrationField[],
 ) {
-  const entries = Object.entries(customFields ?? {}).filter(([, value]) => {
-    return value !== undefined && value !== null && value !== "";
-  });
+  return Object.entries(customFields ?? {})
+    .filter(([, value]) => {
+      return value !== undefined && value !== null && value !== "";
+    })
+    .map(([key, value]) => {
+      const field = registrationFields.find((item) => item.key === key);
 
-  return entries.map(([key, value]) => {
-    const field = registrationFields.find((item) => item.key === key);
-
-    return {
-      key,
-      label: field?.labelAr || field?.labelEn || key,
-      value,
-    };
-  });
+      return {
+        key,
+        label: field?.labelAr || field?.labelEn || key,
+        value,
+      };
+    });
 }
 
 export function formatCustomValue(value: unknown): string {
   if (value === undefined || value === null || value === "") return "—";
-
   if (typeof value === "boolean") return value ? "نعم" : "لا";
-
-  if (Array.isArray(value)) {
-    return value.map(formatCustomValue).join("، ");
-  }
+  if (Array.isArray(value)) return value.map(formatCustomValue).join("، ");
 
   if (typeof value === "object") {
     try {
@@ -516,7 +539,18 @@ export function getStatusLabel(status?: string | null) {
     case "ACTIVE":
       return "فعال";
     case "PENDING":
-      return "قيد الانتظار";
+    case "PENDING_OFFLINE":
+      return "بانتظار المزامنة";
+    case "SYNCING":
+      return "جارٍ رفعه";
+    case "LOCAL_SYNCED":
+    case "SYNCED":
+      return "تمت المزامنة";
+    case "FAILED":
+    case "FAILED_OFFLINE_SYNC":
+      return "فشل مؤقت";
+    case "PERMANENT_FAILED":
+      return "يحتاج معالجة";
     case "CANCELLED":
       return "ملغي";
     case "BLOCKED":
@@ -542,12 +576,25 @@ export function isAllowedResult(scanResult?: ScanResult | null) {
 export function getResultMessage(scanResult?: ScanResult | null) {
   if (!scanResult) return "لم يتم تنفيذ عملية المسح";
 
-  return (
+  const reason =
     scanResult.message ||
     scanResult.reason ||
     scanResult.scanEvent?.reason ||
-    "تم رفض الدخول"
-  );
+    "SCAN_DENIED";
+
+  const messages: Record<string, string> = {
+    INVALID_QR: "رمز QR غير صالح.",
+    WRONG_EVENT: "هذا الرمز تابع لفعالية أخرى.",
+    QR_REVOKED: "تم إلغاء رمز QR لهذا الزائر.",
+    QR_EXPIRED: "انتهت صلاحية رمز QR.",
+    REGISTRATION_INACTIVE: "تسجيل الزائر غير فعال.",
+    ATTENDEE_TYPE_NOT_ALLOWED: "نوع الحضور غير مسموح في هذه المنطقة.",
+    ALREADY_ENTERED: "الزائر دخل مسبقًا ولا تسمح الفعالية بإعادة الدخول.",
+    OFFLINE_QR_PENDING_SYNC:
+      "تم قبول العملية مؤقتًا، وستُراجع بعد مزامنة التسجيل.",
+  };
+
+  return messages[reason] || reason || "تم رفض الدخول";
 }
 
 export function getResultTime(scanResult?: ScanResult | null) {
@@ -572,6 +619,27 @@ export function formatDateTime(value?: string | null) {
   }
 }
 
+function normalizeFieldValue(field: PublicRegistrationField, value: unknown) {
+  const type = field.type.toUpperCase();
+
+  if (type === "NUMBER") {
+    if (typeof value === "number") return value;
+
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? value : parsed;
+  }
+
+  if (type === "BOOLEAN" || type === "CHECKBOX") {
+    return Boolean(value);
+  }
+
+  if (type === "MULTI_SELECT") {
+    return Array.isArray(value) ? value : value === "" ? [] : [value];
+  }
+
+  return value;
+}
+
 export function cleanCustomFields(
   fields: PublicRegistrationField[],
   values: Record<string, unknown>,
@@ -580,10 +648,13 @@ export function cleanCustomFields(
 
   fields.forEach((field) => {
     const value = values[field.key];
+    const emptyArray = Array.isArray(value) && value.length === 0;
 
-    if (value === undefined || value === null || value === "") return;
+    if (value === undefined || value === null || value === "" || emptyArray) {
+      return;
+    }
 
-    cleaned[field.key] = value;
+    cleaned[field.key] = normalizeFieldValue(field, value);
   });
 
   return cleaned;
@@ -601,12 +672,10 @@ export function buildVisitorFromRegisterResponse(
   },
 ): StaffScannerVisitor {
   const registration = data.registration || data;
-
   const qrToken =
     getQrTokenFromQrResponse(data.qrToken) ||
     getQrTokenFromQrResponse(data.qr) ||
     "";
-
   const qrImageUrl =
     resolveAssetUrl(data.qrImageUrl) ||
     resolveAssetUrl(data.imageUrl) ||
@@ -618,22 +687,18 @@ export function buildVisitorFromRegisterResponse(
     id: registration.id || data.id || "",
     registrationId: registration.id || data.id || "",
     publicId: registration.publicId || data.publicId || null,
-
     fullName: registration.fullName || data.fullName || fallback.fullName,
     phone: registration.phone || data.phone || fallback.phone,
     email: registration.email || data.email || fallback.email,
     status: registration.status || data.status || "ACTIVE",
-
     attendeeTypeName:
       fallback.attendeeType?.nameAr ||
       fallback.attendeeType?.nameEn ||
       fallback.attendeeType?.code ||
       null,
-
     attendeeTypeCode: fallback.attendeeType?.code || null,
     customFields:
       registration.customFields || data.customFields || fallback.customFields,
-
     qrToken,
     qrImageUrl,
   };

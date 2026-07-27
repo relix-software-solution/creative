@@ -1,5 +1,6 @@
 import { adminClient } from "@/lib/api/admin-client";
 import { unwrapApiData } from "@/lib/api/unwrap-api-data";
+import type { BadgeTemplateSelectedField } from "@/features/badge-templates/badge-templates.types";
 
 export type StaffVisitorAttendeeType = {
   id: string;
@@ -11,8 +12,10 @@ export type StaffVisitorAttendeeType = {
 export type StaffVisitorQrObject = {
   id?: string | null;
   registrationId?: string | null;
+  tokenId?: string | null;
 
   qrToken?: string | null;
+  compactQrToken?: string | null;
   token?: string | null;
   value?: string | null;
   signedToken?: string | null;
@@ -29,20 +32,34 @@ export type StaffVisitorQrObject = {
   status?: string | null;
   validFrom?: string | null;
   validUntil?: string | null;
+  generatedAt?: string | null;
+  updatedAt?: string | null;
 };
 
 export type StaffVisitor = {
   id: string;
   publicId?: string | null;
+
   status?: string | null;
+  source?: string | null;
+
+  attendeeTypeId?: string | null;
 
   fullName: string;
   phone?: string | null;
   email?: string | null;
 
+  companyName?: string | null;
+  jobTitle?: string | null;
+  externalId?: string | null;
+  notes?: string | null;
+
   customFields?: Record<string, unknown> | null;
+
   registeredAt?: string | null;
+  syncedAt?: string | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
 
   attendeeType?: StaffVisitorAttendeeType | null;
 
@@ -52,6 +69,11 @@ export type StaffVisitor = {
   qrImageUrl?: string | null;
   imageUrl?: string | null;
   publicUrl?: string | null;
+
+  offlineSignedQr?: string | null;
+  canonicalQrToken?: string | null;
+
+  qrLookupKeys?: string[];
 };
 
 export type StaffVisitorsResponse = {
@@ -100,20 +122,28 @@ export type StaffVisitorQrResponse = {
 };
 
 export type StaffBadgeTemplate = {
+  id?: string | null;
+  eventId?: string | null;
+
   widthMm?: number | string | null;
   heightMm?: number | string | null;
+
   backgroundImageUrl?: string | null;
   backgroundImageRelativePath?: string | null;
+
   colors?: Record<string, unknown> | null;
   layout?: Record<string, unknown> | null;
-  selectedFields?: string[] | null;
+
+  selectedFields?: string[] | BadgeTemplateSelectedField[] | null;
 };
 
 export type StaffBadgeField = {
   key: string;
+
   label?: string | null;
   labelAr?: string | null;
   labelEn?: string | null;
+
   value?: unknown;
 };
 
@@ -124,11 +154,99 @@ export type StaffVisitorBadgeResponse = {
   fields?: StaffBadgeField[];
 };
 
+/**
+ * Metadata الخاصة بعملية تنزيل Snapshot.
+ */
+export type StaffOfflineVisitorsSnapshotMetadata = {
+  version: number;
+  id: string;
+  eventId: string;
+  snapshotAsOf: string;
+
+  pageSize: number;
+  returnedCount: number;
+
+  /**
+   * الباك يرجع العدد في الصفحة الأولى فقط.
+   * في الصفحات التالية يمكن أن تكون null.
+   */
+  totalCount: number | null;
+
+  hasMore: boolean;
+  nextCursor: string | null;
+};
+
+export type StaffOfflineVisitorsSnapshotEvent = {
+  id: string;
+
+  titleAr?: string | null;
+  titleEn?: string | null;
+
+  startsAt?: string | null;
+  endsAt?: string | null;
+  timezone?: string | null;
+  updatedAt?: string | null;
+};
+
+export type StaffOfflineVisitorsSnapshotResponse = {
+  snapshot: StaffOfflineVisitorsSnapshotMetadata;
+  event: StaffOfflineVisitorsSnapshotEvent;
+
+  badgeTemplate: StaffBadgeTemplate | null;
+
+  visitors: StaffVisitor[];
+};
+
+export type StaffOfflineVisitorsSnapshotParams = {
+  cursor?: string | null;
+  limit?: number;
+
+  /**
+   * يسمح بإلغاء الطلب عندما ينقطع الإنترنت
+   * أو يتم فك الصفحة.
+   */
+  signal?: AbortSignal;
+};
+
+export type UpdateStaffVisitorPayload = {
+  expectedUpdatedAt?: string;
+
+  fullName?: string;
+  phone?: string;
+  email?: string | null;
+
+  companyName?: string;
+  jobTitle?: string;
+
+  customFields?: Record<string, unknown>;
+  notes?: string;
+};
+
+export type UpdateStaffVisitorResponse = {
+  id: string;
+  publicId?: string | null;
+
+  status?: string | null;
+
+  fullName: string;
+  phone?: string | null;
+  email?: string | null;
+
+  companyName?: string | null;
+  jobTitle?: string | null;
+
+  customFields?: Record<string, unknown> | null;
+  attendeeType?: StaffVisitorAttendeeType | null;
+
+  updatedAt: string;
+};
+
 export async function getStaffVisitors(params: StaffVisitorsParams = {}) {
   const response = await adminClient.get("/staff/visitors", {
     params: {
       page: params.page ?? 1,
       limit: params.limit ?? 20,
+
       search: params.search?.trim() || undefined,
       phone: params.phone?.trim() || undefined,
       email: params.email?.trim() || undefined,
@@ -138,6 +256,34 @@ export async function getStaffVisitors(params: StaffVisitorsParams = {}) {
   });
 
   return unwrapApiData<StaffVisitorsResponse>(response.data);
+}
+
+/**
+ * تنزيل دفعة واحدة من Offline Snapshot.
+ *
+ * لا تقوم هذه الدالة بعمل loop داخلي.
+ * إدارة الـcursor والحفظ والاستكمال ستكون داخل طبقة IndexedDB.
+ */
+export async function getStaffOfflineVisitorsSnapshot(
+  params: StaffOfflineVisitorsSnapshotParams = {},
+) {
+  const online = typeof navigator === "undefined" ? true : navigator.onLine;
+
+  if (!online) {
+    throw new Error("OFFLINE_SNAPSHOT_REQUEST_BLOCKED");
+  }
+
+  const response = await adminClient.get("/staff/visitors/offline-snapshot", {
+    params: {
+      limit: Math.min(Math.max(params.limit ?? 500, 50), 500),
+
+      cursor: params.cursor?.trim() || undefined,
+    },
+
+    signal: params.signal,
+  });
+
+  return unwrapApiData<StaffOfflineVisitorsSnapshotResponse>(response.data);
 }
 
 export async function generateStaffVisitorQr(registrationId: string) {
@@ -158,10 +304,18 @@ export async function getStaffVisitorBadge(
 
   return unwrapApiData<StaffVisitorBadgeResponse>(response.data);
 }
+
+/**
+ * الطريقة القديمة المبنية على page/limit.
+ *
+ * نتركها مؤقتًا حتى ننتهي من ربط Snapshot الجديد بالصفحة،
+ * وبعد نجاح الاختبار سنحذف استخدامها من StaffScannerPage.
+ */
 export async function getAllStaffVisitorsForOffline(
   options: {
     limit?: number;
     maxPages?: number;
+
     onPage?: (info: {
       page: number;
       totalPages?: number;
@@ -170,14 +324,21 @@ export async function getAllStaffVisitorsForOffline(
     }) => void;
   } = {},
 ) {
-  const limit = options.limit ?? 200;
-  const maxPages = options.maxPages ?? 200;
+  const limit = options.limit ?? 20;
+  const maxPages = options.maxPages ?? 1000;
 
   let page = 1;
   let totalPages: number | undefined;
+
   const allItems: StaffVisitor[] = [];
 
   while (page <= maxPages) {
+    const online = typeof navigator === "undefined" ? true : navigator.onLine;
+
+    if (!online) {
+      break;
+    }
+
     const response = await getStaffVisitors({
       page,
       limit,
@@ -196,21 +357,40 @@ export async function getAllStaffVisitorsForOffline(
       totalItems: allItems.length,
     });
 
-    if (typeof totalPages === "number" && page >= totalPages) break;
-    if (items.length < limit) break;
-    if (items.length === 0) break;
+    if (typeof totalPages === "number" && page >= totalPages) {
+      break;
+    }
+
+    if (items.length < limit || items.length === 0) {
+      break;
+    }
 
     page += 1;
   }
 
   return {
     event: null,
+
     visitors: {
       items: allItems,
+
       page: 1,
       limit: allItems.length,
+
       total: allItems.length,
-      totalPages: 1,
+      totalPages: allItems.length === 0 ? 0 : 1,
     },
   } satisfies StaffVisitorsResponse;
+}
+
+export async function updateStaffVisitor(
+  registrationId: string,
+  payload: UpdateStaffVisitorPayload,
+) {
+  const response = await adminClient.patch(
+    `/staff/visitors/${registrationId}`,
+    payload,
+  );
+
+  return unwrapApiData<UpdateStaffVisitorResponse>(response.data);
 }

@@ -178,6 +178,13 @@ export function StaffVisitorCard({
                 تم إنشاء التسجيل بنجاح. يمكنك الآن تجهيز QR أو طباعة البادج.
               </p>
             ) : null}
+
+            {source === "offline-scan" ? (
+              <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-xs font-black leading-6 text-emerald-700">
+                تم التعرف على الزائر وحفظ عملية الدخول محليًا. يمكنك طباعة
+                البادج الآن، وستُرفع الحركة تلقائيًا عند عودة الاتصال.
+              </p>
+            ) : null}
           </section>
 
           <aside className="mx-auto w-full max-w-[240px] rounded-[1.4rem] bg-white p-3 text-center shadow-sm">
@@ -193,7 +200,11 @@ export function StaffVisitorCard({
                 <img
                   src={qrImageUrl}
                   alt="Visitor QR"
-                  className="h-32 w-32 object-contain sm:h-36 sm:w-36"
+                  className="h-[48mm] w-[48mm] object-contain"
+                  style={{
+                    imageRendering: "pixelated",
+                    backgroundColor: "#FFFFFF",
+                  }}
                 />
               ) : qrToken ? (
                 <div className="mx-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-6 text-amber-800">

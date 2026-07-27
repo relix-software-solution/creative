@@ -1,4 +1,4 @@
-import { CSSProperties } from "react";
+import { ChangeEvent, CSSProperties } from "react";
 import { PublicRegistrationField } from "@/features/public-events/public-events.types";
 import { getOptionLabel, getOptionValue } from "../utils/staff-scanner.helpers";
 import { StaffScannerTheme } from "../utils/staff-scanner.types";
@@ -47,6 +47,7 @@ export function StaffBaseInput({
   dir,
   inputMode,
   className = "",
+  disabled = false,
 }: {
   ar: string;
   en?: string;
@@ -60,6 +61,7 @@ export function StaffBaseInput({
   dir?: "rtl" | "ltr";
   inputMode?: "text" | "tel" | "email" | "numeric" | "decimal" | "search";
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <div className={`space-y-2 ${className}`}>
@@ -68,7 +70,10 @@ export function StaffBaseInput({
       <input
         type={type}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+          onChange(event.target.value)
+        }
         placeholder={placeholder}
         dir={dir}
         inputMode={inputMode}
@@ -105,7 +110,7 @@ export function StaffDynamicField({
 }) {
   const labelAr = field.labelAr || field.labelEn || field.key;
   const labelEn = field.labelEn || field.key;
-
+  const fieldType = field.type.toUpperCase();
   const inputStyle = {
     borderRadius: theme.radius,
     color: theme.text,
@@ -113,7 +118,7 @@ export function StaffDynamicField({
     "--tw-ring-color": `${theme.primary}1A`,
   } as CSSProperties;
 
-  if (field.type === "TEXTAREA") {
+  if (fieldType === "TEXTAREA") {
     return (
       <div className="space-y-2 md:col-span-2">
         <BilingualLabel
@@ -128,7 +133,9 @@ export function StaffDynamicField({
           value={String(value ?? "")}
           disabled={disabled}
           placeholder={field.placeholderAr || field.placeholderEn || ""}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+            onChange(event.target.value)
+          }
           className="w-full resize-none border border-black/10 bg-white/80 px-4 py-3 text-sm font-bold outline-none transition placeholder:text-black/35 focus:bg-white focus:ring-4 disabled:cursor-not-allowed disabled:bg-black/5"
           style={inputStyle}
         />
@@ -140,7 +147,7 @@ export function StaffDynamicField({
     );
   }
 
-  if (field.type === "SELECT") {
+  if (fieldType === "SELECT") {
     const options = Array.isArray(field.options) ? field.options : [];
 
     return (
@@ -155,7 +162,9 @@ export function StaffDynamicField({
         <select
           value={String(value ?? "")}
           disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+            onChange(event.target.value)
+          }
           className="h-12 w-full border border-black/10 bg-white/80 px-4 text-sm font-bold outline-none transition focus:bg-white focus:ring-4 disabled:cursor-not-allowed disabled:bg-black/5"
           style={inputStyle}
         >
@@ -177,7 +186,60 @@ export function StaffDynamicField({
     );
   }
 
-  if (field.type === "CHECKBOX") {
+  if (fieldType === "MULTI_SELECT") {
+    const options = Array.isArray(field.options) ? field.options : [];
+    const selected = Array.isArray(value) ? value.map(String) : [];
+
+    return (
+      <div className="space-y-2 md:col-span-2">
+        <BilingualLabel
+          ar={labelAr}
+          en={labelEn}
+          required={field.isRequired}
+          theme={theme}
+        />
+
+        <div
+          className="grid gap-2 border border-black/10 bg-white/80 p-3 sm:grid-cols-2"
+          style={inputStyle}
+        >
+          {options.map((option) => {
+            const optionValue = getOptionValue(option);
+            const checked = selected.includes(optionValue);
+
+            return (
+              <label
+                key={optionValue}
+                className="flex items-center gap-2 rounded-xl px-2 py-2 text-sm font-bold"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    const next = event.target.checked
+                      ? [...selected, optionValue]
+                      : selected.filter((item) => item !== optionValue);
+
+                    onChange(next);
+                  }}
+                  className="h-4 w-4"
+                  style={{ accentColor: theme.primary }}
+                />
+                <span>{getOptionLabel(option)}</span>
+              </label>
+            );
+          })}
+        </div>
+
+        {error ? (
+          <p className="text-sm font-bold text-red-600">{error}</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (fieldType === "BOOLEAN" || fieldType === "CHECKBOX") {
     return (
       <div className="space-y-2 md:col-span-2">
         <label
@@ -192,7 +254,9 @@ export function StaffDynamicField({
             type="checkbox"
             checked={Boolean(value)}
             disabled={disabled}
-            onChange={(event) => onChange(event.target.checked)}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              onChange(event.target.checked)
+            }
             className="h-5 w-5"
             style={{ accentColor: theme.primary }}
           />
@@ -222,13 +286,13 @@ export function StaffDynamicField({
   }
 
   const inputType =
-    field.type === "EMAIL"
+    fieldType === "EMAIL"
       ? "email"
-      : field.type === "PHONE"
+      : fieldType === "PHONE"
         ? "tel"
-        : field.type === "NUMBER"
+        : fieldType === "NUMBER"
           ? "number"
-          : field.type === "DATE"
+          : fieldType === "DATE"
             ? "date"
             : "text";
 
@@ -246,8 +310,10 @@ export function StaffDynamicField({
         value={String(value ?? "")}
         disabled={disabled}
         placeholder={field.placeholderAr || field.placeholderEn || ""}
-        onChange={(event) => onChange(event.target.value)}
-        dir={field.type === "EMAIL" || field.type === "PHONE" ? "ltr" : "rtl"}
+        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+          onChange(event.target.value)
+        }
+        dir={fieldType === "EMAIL" || fieldType === "PHONE" ? "ltr" : "rtl"}
         className="h-12 w-full border border-black/10 bg-white/80 px-4 text-sm font-bold outline-none transition placeholder:text-black/35 focus:bg-white focus:ring-4 disabled:cursor-not-allowed disabled:bg-black/5"
         style={inputStyle}
       />

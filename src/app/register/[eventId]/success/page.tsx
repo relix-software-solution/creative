@@ -715,11 +715,6 @@ export default function PublicRegistrationSuccessPage() {
                       <h2 className=" text-base text-white font-extrabold">
                         استلام بطاقة الدخول على WhatsApp
                       </h2>
-
-                      <p className="mt-2 text-sm font-bold leading-7 text-white/65">
-                        اضغط الزر ثم أرسل الرسالة الجاهزة. بعد إرسالها سيتولى
-                        الباك إرسال البطاقة تلقائيًا.
-                      </p>
                     </div>
                   </div>
 

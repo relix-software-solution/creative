@@ -1,17 +1,32 @@
-export type ScanType = "ENTRY" | "EXIT";
+export type ScanType =
+  | "ENTRY"
+  | "EXIT"
+  | "CHECKPOINT"
+  | "BOOTH_VISIT"
+  | "SESSION_ATTENDANCE"
+  | "VIP_ACCESS";
 
-export type QueuedScanStatus = "PENDING" | "SYNCED" | "FAILED";
+export type QueuedScanStatus =
+  | "PENDING"
+  | "SYNCING"
+  | "SYNCED"
+  | "FAILED"
+  | "PERMANENT_FAILED";
 
 export type CreateScanPayload = {
   operationId: string;
+
   eventId: string;
   deviceId: string;
   staffSessionId: string;
   checkpointId: string;
+
   qrToken: string;
   registrationId?: string | null;
+
   type: ScanType;
   scannedAtDevice: string;
+
   payload?: Record<string, unknown>;
 };
 
@@ -50,9 +65,13 @@ export type ScanRegistration = {
 };
 
 export type ScanQr = {
+  id?: string | null;
+  registrationId?: string | null;
+
   qrToken?: string | null;
   token?: string | null;
   signedToken?: string | null;
+  compactQrToken?: string | null;
   value?: string | null;
 
   imageUrl?: string | null;
@@ -68,10 +87,15 @@ export type ScanQr = {
 export type ScanResult = {
   allowed?: boolean;
   success?: boolean;
+
   decision?: "ALLOWED" | "DENIED" | string;
   status?: string;
+
   reason?: string;
   message?: string;
+
+  pendingReconciliation?: boolean;
+  provisional?: boolean;
 
   qr?: ScanQr | null;
 
@@ -80,7 +104,10 @@ export type ScanResult = {
     status?: string;
     reason?: string | null;
     type?: string;
+
     scannedAtDevice?: string;
+    receivedAtServer?: string;
+    processedAt?: string | null;
     createdAt?: string;
   };
 
@@ -88,6 +115,9 @@ export type ScanResult = {
     id?: string;
     type?: string;
     direction?: string;
+    result?: string;
+
+    occurredAt?: string;
     createdAt?: string;
   };
 
@@ -105,8 +135,16 @@ export type ScanResult = {
 
 export type QueuedStaffScan = CreateScanPayload & {
   id?: number;
+
   status: QueuedScanStatus;
+
+  errorCode?: string | null;
   errorMessage?: string | null;
+  retryable?: boolean | null;
+
+  attemptCount?: number;
+  lastAttemptAt?: string | null;
+
   createdAt: string;
   syncedAt?: string | null;
 };

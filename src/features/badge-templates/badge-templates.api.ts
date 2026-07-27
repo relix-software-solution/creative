@@ -7,6 +7,12 @@ import {
   BadgeTemplatePayload,
 } from "./badge-templates.types";
 
+function assertOnline() {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    throw new Error("OFFLINE_BADGE_TEMPLATE_REQUEST_BLOCKED");
+  }
+}
+
 function appendJsonField(formData: FormData, key: string, value: unknown) {
   if (value === undefined || value === null) return;
 
@@ -51,6 +57,8 @@ export async function getBadgeTemplates() {
 }
 
 export async function getBadgeTemplateByEvent(eventId: string) {
+  assertOnline();
+
   const response = await adminClient.get(`/badge-templates/events/${eventId}`);
 
   return unwrapApiData<BadgeTemplate>(response.data);
@@ -110,6 +118,8 @@ export async function getResolvedBadgeData(
   eventId: string,
   registrationId: string,
 ) {
+  assertOnline();
+
   const response = await adminClient.get(
     `/badge-templates/events/${eventId}/registrations/${registrationId}`,
   );

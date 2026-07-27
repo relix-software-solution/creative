@@ -1,5 +1,5 @@
 import { CheckCircle2, Loader2 } from "lucide-react";
-import { CSSProperties } from "react";
+import { ChangeEvent, CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { StaffCreateVisitorModalProps } from "../utils/staff-scanner.types";
@@ -26,7 +26,7 @@ export function StaffCreateVisitorModal({
       open={open}
       onClose={onClose}
       title="تسجيل زائر جديد"
-      description="أدخل بيانات الزائر حسب حقول الفعالية، وسيتم إنشاء QR له."
+      description="أدخل بيانات الزائر حسب حقول الفعالية. عند انقطاع الإنترنت سيُحفظ التسجيل محليًا مع QR موقّع وآمن."
       className="max-w-4xl"
       footer={
         <>
@@ -81,7 +81,9 @@ export function StaffCreateVisitorModal({
 
             <select
               value={attendeeTypeId}
-              onChange={(event) => onAttendeeTypeChange(event.target.value)}
+              onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                onAttendeeTypeChange(event.target.value)
+              }
               disabled={isSubmitting}
               className="h-12 w-full border border-black/10 bg-white px-4 text-sm font-bold outline-none transition focus:ring-4 disabled:cursor-not-allowed disabled:bg-black/5"
               style={
@@ -117,6 +119,7 @@ export function StaffCreateVisitorModal({
             placeholder="مثال: محمد أحمد"
             error={errors.fullName}
             theme={theme}
+            disabled={isSubmitting}
             onChange={(value) => onFormChange("fullName", value)}
           />
 
@@ -128,6 +131,7 @@ export function StaffCreateVisitorModal({
             placeholder="+963944123456"
             error={errors.phone}
             theme={theme}
+            disabled={isSubmitting}
             dir="ltr"
             inputMode="tel"
             onChange={(value) => onFormChange("phone", value)}
@@ -135,12 +139,12 @@ export function StaffCreateVisitorModal({
 
           <StaffBaseInput
             ar="البريد الإلكتروني"
-            en="Email Address"
-            required
+            en="Email Address (Optional)"
             value={form.email}
             placeholder="name@example.com"
             error={errors.email}
             theme={theme}
+            disabled={isSubmitting}
             dir="ltr"
             type="email"
             className="md:col-span-2"
@@ -162,7 +166,7 @@ export function StaffCreateVisitorModal({
                 className="mt-1 text-xs font-bold opacity-50"
                 style={{ color: theme.text }}
               >
-                هذه الحقول يتم جلبها من إعدادات الفعالية ونوع الحضور.
+                تشمل الحقول العامة للفعالية والحقول الخاصة بنوع الحضور.
               </p>
             </div>
 

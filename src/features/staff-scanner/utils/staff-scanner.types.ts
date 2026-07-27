@@ -9,7 +9,11 @@ export type ScannerControls = {
   stop: () => void;
 };
 
-export type StaffScannerVisitorSource = "scan" | "lookup" | "created";
+export type StaffScannerVisitorSource =
+  | "scan"
+  | "offline-scan"
+  | "lookup"
+  | "created";
 
 export type StaffScannerTheme = {
   primary: string;
@@ -23,17 +27,13 @@ export type StaffScannerVisitor = {
   id?: string;
   registrationId?: string;
   publicId?: string | null;
-
   fullName: string;
   phone?: string | null;
   email?: string | null;
   status?: string | null;
-
   attendeeTypeName?: string | null;
   attendeeTypeCode?: string | null;
-
   customFields?: Record<string, unknown> | null;
-
   qrToken?: string;
   qrImageUrl?: string;
 };

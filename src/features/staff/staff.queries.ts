@@ -91,11 +91,26 @@ export function useDeleteStaffAssignment() {
   });
 }
 
-export function useMyStaffAssignment() {
+export function useMyStaffAssignment(enabled = true) {
   return useQuery({
     queryKey: staffKeys.myAssignment(),
     queryFn: getMyStaffAssignment,
+
+    enabled,
+
     retry: false,
+
+    /*
+     * لا نعيد الطلب لمجرد التركيز على الصفحة.
+     */
+    refetchOnWindowFocus: false,
+
+    /*
+     * عند رجوع الإنترنت تستطيع الصفحة إعادة تفعيل الاستعلام.
+     */
+    refetchOnReconnect: true,
+
+    networkMode: "online",
   });
 }
 

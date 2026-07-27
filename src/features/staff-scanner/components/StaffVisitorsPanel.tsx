@@ -1,4 +1,11 @@
-import { Loader2, Printer, ScanLine, Search, UserPlus } from "lucide-react";
+import {
+  Loader2,
+  Pencil,
+  Printer,
+  ScanLine,
+  Search,
+  UserPlus,
+} from "lucide-react";
 import { CSSProperties, FormEvent, ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,6 +79,7 @@ export function StaffVisitorsPanel({
   visitors,
   registrationFields,
   onCreate,
+  onEdit,
   onPrint,
   onGenerateQr,
   onScan,
@@ -89,6 +97,7 @@ export function StaffVisitorsPanel({
   visitors: StaffVisitor[];
   registrationFields: PublicRegistrationField[];
   onCreate: () => void;
+  onEdit: (visitor: StaffVisitor) => void;
   onPrint: (visitor: StaffVisitor) => void | Promise<void>;
   onGenerateQr: (visitor: StaffVisitor) => void | Promise<void>;
   onScan: (visitor: StaffVisitor) => void | Promise<void>;
@@ -104,7 +113,8 @@ export function StaffVisitorsPanel({
   }
 
   function getAttendeeTypeName(visitor: StaffVisitor) {
-    const visitorWithLegacyFields = visitor as StaffVisitorWithLegacyAttendeeType;
+    const visitorWithLegacyFields =
+      visitor as StaffVisitorWithLegacyAttendeeType;
 
     return (
       visitor.attendeeType?.nameAr ||
@@ -120,13 +130,6 @@ export function StaffVisitorsPanel({
   }
 
   function handlePrint(visitor: StaffVisitor) {
-    const visitorWithBadge = visitor as StaffVisitorWithBadge;
-
-    if (visitorWithBadge.badge) {
-      printVisitorBadge(visitorWithBadge);
-      return;
-    }
-
     onPrint(visitor);
   }
 
@@ -303,24 +306,21 @@ export function StaffVisitorsPanel({
                     )}
                   </div>
 
-                  {visitorWithBadge.badge ? (
-                    <div className="border-t border-black/5 pt-3">
-                      <p
-                        className="mb-3 text-center text-xs font-black opacity-55"
-                        style={{ color: theme.text }}
-                      >
-                        معاينة البادج
-                      </p>
+                  <div className="grid grid-cols-3 gap-2 pt-1">
+                    <ActionButton
+                      title="تعديل بيانات الزائر"
+                      label=""
+                      disabled={isPrinting || isScanning || isGenerating}
+                      onClick={() => onEdit(visitor)}
+                      className="h-11 min-w-0 px-2"
+                      style={{
+                        backgroundColor: theme.primary,
+                        color: "#fff",
+                      }}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </ActionButton>
 
-                      <BadgePreview visitor={visitorWithBadge} />
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs font-black leading-6 text-amber-700">
-                      لا يوجد قالب بادج مرتبط بهذه الفعالية بعد.
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2 pt-1">
                     <ActionButton
                       title="عمل سكان لهذا الزائر"
                       label=""
