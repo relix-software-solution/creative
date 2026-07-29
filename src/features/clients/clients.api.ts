@@ -2,37 +2,31 @@ import { adminClient } from "@/lib/api/admin-client";
 import { unwrapApiData } from "@/lib/api/unwrap-api-data";
 import {
   Client,
+  ClientAccessAccount,
   ClientsListParams,
   ClientsListResponse,
+  CreateClientAccessAccountPayload,
   CreateClientPayload,
+  CreateClientWithAccessAccountPayload,
+  CreateClientWithAccessAccountResponse,
+  UpdateClientAccessAccountPayload,
   UpdateClientPayload,
 } from "./clients.types";
-
-type DeleteClientResponse = {
-  id?: string;
-  message?: string;
-  client?: Client;
-};
 
 function normalizeClientsList(data: unknown): ClientsListResponse {
   const value = unwrapApiData<ClientsListResponse | Client[]>(data);
 
   if (Array.isArray(value)) {
-    const activeItems = value.filter((client) => client.isActive !== false);
-
     return {
-      items: activeItems,
-      total: activeItems.length,
+      items: value,
+      total: value.length,
       page: 1,
-      limit: activeItems.length,
-      totalPages: 1,
+      limit: value.length || 20,
+      totalPages: value.length > 0 ? 1 : 0,
     };
   }
 
-  const items = (value.items ?? []).filter(
-    (client) => client.isActive !== false,
-  );
-
+  const items = value.items ?? [];
   const limit = value.limit ?? 20;
   const total = value.total ?? items.length;
 
@@ -41,8 +35,24 @@ function normalizeClientsList(data: unknown): ClientsListResponse {
     total,
     page: value.page ?? 1,
     limit,
-    totalPages: value.totalPages ?? Math.max(Math.ceil(total / limit), 1),
+    totalPages:
+      value.totalPages ??
+      (total === 0 ? 0 : Math.ceil(total / limit)),
   };
+}
+
+function isNotFoundError(error: unknown) {
+  if (!error || typeof error !== "object" || !("response" in error)) {
+    return false;
+  }
+
+  return (
+    error as {
+      response?: {
+        status?: number;
+      };
+    }
+  ).response?.status === 404;
 }
 
 export async function getClients(params: ClientsListParams) {
@@ -56,15 +66,28 @@ export async function getClients(params: ClientsListParams) {
 export async function getClient(id: string) {
   const response = await adminClient.get(`/clients/${id}`);
 
-  const client = unwrapApiData<Client>(response.data);
-
-  return client;
+  return unwrapApiData<Client>(response.data);
 }
 
+/**
+ * المسار القديم محفوظ للتوافق مع أي استخدامات قديمة.
+ * شاشة العملاء الجديدة تستخدم createClientWithAccessAccount.
+ */
 export async function createClient(payload: CreateClientPayload) {
   const response = await adminClient.post("/clients", payload);
 
   return unwrapApiData<Client>(response.data);
+}
+
+export async function createClientWithAccessAccount(
+  payload: CreateClientWithAccessAccountPayload,
+) {
+  const response = await adminClient.post(
+    "/clients/with-access-account",
+    payload,
+  );
+
+  return unwrapApiData<CreateClientWithAccessAccountResponse>(response.data);
 }
 
 export async function updateClient(id: string, payload: UpdateClientPayload) {
@@ -73,24 +96,82 @@ export async function updateClient(id: string, payload: UpdateClientPayload) {
   return unwrapApiData<Client>(response.data);
 }
 
-export async function deleteClient(id: string) {
+export async function getClientAccessAccount(
+  clientId: string,
+): Promise<ClientAccessAccount | null> {
+  try {
+    const response = await adminClient.get(
+      `/clients/${clientId}/access-account`,
+    );
+
+    return unwrapApiData<ClientAccessAccount>(response.data);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export async function createClientAccessAccount(
+  clientId: string,
+  payload: CreateClientAccessAccountPayload,
+) {
+  const response = await adminClient.post(
+    `/clients/${clientId}/access-account`,
+    payload,
+  );
+
+  return unwrapApiData<{
+    client: Client;
+    accessAccount: ClientAccessAccount;
+  }>(response.data);
+}
+
+export async function updateClientAccessAccount(
+  clientId: string,
+  payload: UpdateClientAccessAccountPayload,
+) {
+  const response = await adminClient.patch(
+    `/clients/${clientId}/access-account`,
+    payload,
+  );
+
+  return unwrapApiData<ClientAccessAccount>(response.data);
+}
+
+export async function resetClientAccessAccountPassword(
+  clientId: string,
+  newPassword: string,
+) {
+  const response = await adminClient.post(
+    `/clients/${clientId}/access-account/reset-password`,
+    { newPassword },
+  );
+
+  return unwrapApiData<{ reset: boolean }>(response.data);
+}
+
+export async function setClientActiveStatus(
+  id: string,
+  isActive: boolean,
+) {
+  const response = await adminClient.patch(`/clients/${id}/status`, {
+    isActive,
+  });
+
+  return unwrapApiData<{
+    changed: boolean;
+    client: Client;
+  }>(response.data);
+}
+
+export async function deleteClientPermanently(id: string) {
   const response = await adminClient.delete(`/clients/${id}`);
 
-  const data = unwrapApiData<DeleteClientResponse | Client>(response.data);
-
-  if (data && typeof data === "object" && "client" in data && data.client?.id) {
-    return {
-      id: data.client.id,
-      client: data.client,
-    };
-  }
-
-  if (data && typeof data === "object" && "id" in data && data.id) {
-    return {
-      id: data.id,
-      client: data as Client,
-    };
-  }
-
-  return { id };
+  return unwrapApiData<{
+    deleted: boolean;
+    id: string;
+  }>(response.data);
 }

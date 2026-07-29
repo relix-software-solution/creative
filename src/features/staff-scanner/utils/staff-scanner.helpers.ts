@@ -277,10 +277,15 @@ export function extractQrToken(value: string) {
 
     if (isObject(parsed)) {
       return firstText(
+        parsed.offlineQrToken,
+        parsed.compactQrToken,
+        parsed.canonicalQrToken,
+
         parsed.qrToken,
         parsed.token,
-        parsed.signedToken,
         parsed.value,
+
+        parsed.signedToken,
       );
     }
   } catch {
@@ -296,10 +301,21 @@ export function getQrTokenFromQrResponse(value: unknown): string {
   if (!isObject(value)) return "";
 
   const direct = firstText(
+    /*
+     * الرموز الأقصر أولًا.
+     */
+    value.offlineQrToken,
+    value.compactQrToken,
+    value.canonicalQrToken,
+
     value.qrToken,
     value.token,
-    value.signedToken,
     value.value,
+
+    /*
+     * التوكن الكامل يأتي أخيرًا.
+     */
+    value.signedToken,
   );
 
   if (direct) return direct;
@@ -441,22 +457,58 @@ export function getVisitorQrToken(visitor?: StaffVisitor | null) {
     return "";
   }
 
-  const offlineSignedQr = visitor.offlineSignedQr?.trim() || "";
-
-  const direct =
-    typeof visitor.qrToken === "string" ? visitor.qrToken.trim() : "";
-
-  const nested =
-    getQrTokenFromQrResponse(visitor.qrToken) ||
-    getQrTokenFromQrResponse(visitor.qr);
-
-  const canonicalQrToken = visitor.canonicalQrToken?.trim() || "";
+  /*
+   * رمز O2 القصير الخاص بتسجيل الستاف الأوفلاين.
+   */
+  const offlineQrToken =
+    visitor.offlineQrToken?.trim() || visitor.qr?.offlineQrToken?.trim() || "";
 
   /*
-   * نعطي الأولوية للـOffline QR لأنه قد يكون
-   * مطبوعًا مسبقًا على البادج.
+   * رمز Q2 الرسمي المختصر القادم من الباك.
    */
-  return offlineSignedQr || direct || nested || canonicalQrToken;
+  const canonicalQrToken =
+    visitor.canonicalQrToken?.trim() ||
+    visitor.qr?.canonicalQrToken?.trim() ||
+    visitor.qr?.compactQrToken?.trim() ||
+    "";
+
+  const direct =
+    typeof visitor.qrToken === "string"
+      ? visitor.qrToken.trim()
+      : getQrTokenFromQrResponse(visitor.qrToken);
+
+  const nested = getQrTokenFromQrResponse(visitor.qr);
+
+  /*
+   * نفضّل صراحة الرموز القصيرة:
+   *
+   * O2 = تسجيل Staff Offline
+   * Q2 = QR رسمي مختصر من الباك
+   */
+  const preferredShortToken = [
+    offlineQrToken,
+    canonicalQrToken,
+    direct,
+    nested,
+  ].find((token) => {
+    return token.startsWith("O2.") || token.startsWith("Q2.");
+  });
+
+  if (preferredShortToken) {
+    return preferredShortToken;
+  }
+
+  /*
+   * توافق مع QR القديمة.
+   *
+   * signedOfflineQr يأتي أخيرًا فقط،
+   * لأنه طويل جدًا ويعطي QR كثيفًا.
+   */
+  const offlineSignedQr = visitor.offlineSignedQr?.trim() || "";
+
+  return (
+    offlineQrToken || canonicalQrToken || direct || nested || offlineSignedQr
+  );
 }
 
 export function getVisitorQrImageUrl(visitor?: StaffVisitor | null) {

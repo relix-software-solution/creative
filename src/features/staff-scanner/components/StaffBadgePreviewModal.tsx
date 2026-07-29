@@ -1,12 +1,15 @@
 "use client";
 
+import { toPng } from "html-to-image";
 import { Printer, X } from "lucide-react";
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
   StaffVisitor,
   StaffVisitorBadgeResponse,
 } from "@/features/staff-visitors/staff-visitors.api";
+import { AutoFitBadgeText } from "@/features/staff-scanner/components/AutoFitBadgeText";
 import {
   escapePrintValue,
   formatCustomValue,
@@ -18,13 +21,30 @@ import { StaffScannerTheme } from "../utils/staff-scanner.types";
 type BadgeFieldLayout = {
   x?: number;
   y?: number;
+
   width?: number;
   height?: number;
+
   fontSize?: number;
+
   bold?: boolean;
-  fontWeight?: string;
+  fontWeight?: string | number;
+
   textColor?: string;
   boldColor?: string;
+
+  textAlign?: "left" | "center" | "right";
+
+  /**
+   * يمكن إضافته من إعدادات قالب البادج.
+   * الاسم الكامل يأخذ سطرين افتراضيًا.
+   */
+  maxLines?: number;
+
+  /**
+   * نسبة ارتفاع السطر.
+   */
+  lineHeight?: number;
 };
 
 type BadgeLayoutRecord = {
@@ -65,16 +85,6 @@ function getTemplateLayout(
 
   const layoutRecord = layout as BadgeLayoutRecord;
 
-  /*
-   * الشكل الرسمي المحفوظ من الباك:
-   *
-   * {
-   *   fields: {
-   *     fullName: { x, y, width, fontSize },
-   *     qrCode: { x, y, width, height }
-   *   }
-   * }
-   */
   if (
     layoutRecord.fields &&
     typeof layoutRecord.fields === "object" &&
@@ -83,9 +93,6 @@ function getTemplateLayout(
     return layoutRecord.fields;
   }
 
-  /*
-   * دعم نسخ قديمة قد تكون خزنت Field Layout مباشرة.
-   */
   const directFields = Object.entries(layout).filter(([, value]) => {
     return Boolean(asRecord(value));
   });
@@ -112,9 +119,7 @@ function getBadgeFields(
   return (
     data?.fields?.map((field) => ({
       key: field.key,
-
       label: field.labelAr || field.labelEn || field.label || field.key,
-
       value: field.value,
     })) ?? []
   );
@@ -149,13 +154,10 @@ function getFieldValue(
     externalId: registration?.externalId,
 
     "attendeeType.code": registration?.attendeeType?.code,
-
     "attendeeType.nameAr": registration?.attendeeType?.nameAr,
-
     "attendeeType.nameEn": registration?.attendeeType?.nameEn,
 
     qrCode: qrImageUrl,
-
     qrToken: data?.qr?.qrToken || data?.qr?.token || "",
   };
 
@@ -179,11 +181,7 @@ function getSelectedFieldKeys(
 
         const record = asRecord(field);
 
-        if (!record) {
-          return "";
-        }
-
-        if (record.visible === false) {
+        if (!record || record.visible === false) {
           return "";
         }
 
@@ -209,74 +207,70 @@ function normalizeNumber(value: unknown, fallback: number) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-function escapeHtml(value: unknown) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function getTextAlignment(layout: BadgeFieldLayout) {
+  return layout.textAlign === "left" ||
+    layout.textAlign === "center" ||
+    layout.textAlign === "right"
+    ? layout.textAlign
+    : "right";
 }
 
-function buildFieldHtml(options: {
-  fieldKey: string;
-  value: unknown;
-  layout: BadgeFieldLayout;
-  qrImageUrl: string;
-  defaultTextColor: string;
-}) {
-  const { fieldKey, value, layout, qrImageUrl, defaultTextColor } = options;
-
-  const x = normalizeNumber(layout.x, 10);
-  const y = normalizeNumber(layout.y, 10);
-  const width = normalizeNumber(layout.width, isQrField(fieldKey) ? 26 : 70);
-
-  if (isQrField(fieldKey)) {
-    const height = normalizeNumber(layout.height, 26);
-
-    return `
-      <div
-        class="badge-field qr-field"
-        style="
-          left:${x}mm;
-          top:${y}mm;
-          width:${width}mm;
-          height:${height}mm;
-        "
-      >
-        ${
-          qrImageUrl
-            ? `<img src="${escapeHtml(qrImageUrl)}" alt="QR" />`
-            : `<span>QR</span>`
-        }
-      </div>
-    `;
+function getJustifyContent(textAlign: "left" | "center" | "right") {
+  if (textAlign === "left") {
+    return "flex-start";
   }
 
-  const fontSize = normalizeNumber(layout.fontSize, 14);
+  if (textAlign === "center") {
+    return "center";
+  }
 
-  const bold = layout.bold === true || layout.fontWeight === "bold";
+  return "flex-end";
+}
 
-  const textColor =
-    (bold ? layout.boldColor : layout.textColor) ||
-    layout.textColor ||
-    defaultTextColor;
+function getFieldMaxLines(fieldKey: string, layout: BadgeFieldLayout): number {
+  const defaultLines = fieldKey === "fullName" ? 2 : 1;
 
-  return `
-    <div
-      class="badge-field text-field"
-      style="
-        left:${x}mm;
-        top:${y}mm;
-        width:${width}mm;
-        font-size:${fontSize}pt;
-        font-weight:${bold ? 900 : 700};
-        color:${escapeHtml(textColor)};
-      "
-    >
-      ${escapeHtml(formatCustomValue(value))}
-    </div>
-  `;
+  const configuredLines = Math.floor(
+    normalizeNumber(layout.maxLines, defaultLines),
+  );
+
+  return Math.min(4, Math.max(1, configuredLines));
+}
+
+function getFieldLineHeight(
+  fieldKey: string,
+  layout: BadgeFieldLayout,
+): number {
+  const defaultLineHeight = fieldKey === "fullName" ? 1.08 : 1.12;
+
+  return Math.min(
+    1.6,
+    Math.max(0.9, normalizeNumber(layout.lineHeight, defaultLineHeight)),
+  );
+}
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function waitForImage(image: HTMLImageElement) {
+  if (image.complete) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    image.addEventListener("load", () => resolve(), {
+      once: true,
+    });
+
+    image.addEventListener("error", () => resolve(), {
+      once: true,
+    });
+  });
 }
 
 export function StaffBadgePreviewModal({
@@ -284,7 +278,7 @@ export function StaffBadgePreviewModal({
   theme,
   data,
   visitor,
-  eventTitle,
+  eventTitle: _eventTitle,
   onClose,
 }: {
   open: boolean;
@@ -294,6 +288,8 @@ export function StaffBadgePreviewModal({
   eventTitle: string;
   onClose: () => void;
 }) {
+  const badgePrintRef = useRef<HTMLDivElement | null>(null);
+
   const scannerVisitor = visitor
     ? getVisitorInfoFromStaffVisitor(visitor)
     : null;
@@ -301,7 +297,6 @@ export function StaffBadgePreviewModal({
   const template = data?.template;
 
   const widthMm = normalizeNumber(template?.widthMm, 90);
-
   const heightMm = normalizeNumber(template?.heightMm, 120);
 
   const colors = template?.colors as Record<string, unknown> | null;
@@ -338,217 +333,220 @@ export function StaffBadgePreviewModal({
   const previewWidth = widthMm * previewScale;
   const previewHeight = heightMm * previewScale;
 
-  function printBadge() {
-    if (!template) {
+  async function printBadge() {
+    const badgeElement = badgePrintRef.current;
+
+    if (!template || !badgeElement) {
       return;
     }
 
-    const fieldsHtml = selectedFieldKeys
-      .map((fieldKey) => {
-        const layout = layoutFields[fieldKey];
+    try {
+      const fontSet = (
+        document as Document & {
+          fonts?: FontFaceSet;
+        }
+      ).fonts;
 
-        if (!layout) {
-          return "";
+      if (fontSet) {
+        await fontSet.ready;
+      }
+
+      const sourceImages = Array.from(
+        badgeElement.querySelectorAll("img"),
+      ) as HTMLImageElement[];
+
+      await Promise.all(sourceImages.map(waitForImage));
+
+      /*
+       * ننتظر حتى ينتهي AutoFitBadgeText من قياس الاسم
+       * وتطبيق حجم الخط النهائي.
+       */
+      await waitForNextPaint();
+      await waitForNextPaint();
+
+      /*
+       * نطبع نفس عنصر المعاينة نفسه، وليس HTML مختلفًا.
+       */
+      const badgeImage = await toPng(badgeElement, {
+        pixelRatio: 4,
+        cacheBust: true,
+        backgroundColor,
+
+        width: Math.round(previewWidth),
+        height: Math.round(previewHeight),
+
+        style: {
+          margin: "0",
+          border: "0",
+          boxShadow: "none",
+          transform: "none",
+        },
+      });
+
+      const printFrame = document.createElement("iframe");
+
+      printFrame.setAttribute("aria-hidden", "true");
+
+      printFrame.style.position = "fixed";
+      printFrame.style.left = "-10000px";
+      printFrame.style.top = "0";
+
+      printFrame.style.width = `${widthMm}mm`;
+      printFrame.style.height = `${heightMm}mm`;
+
+      printFrame.style.border = "0";
+      printFrame.style.margin = "0";
+      printFrame.style.padding = "0";
+
+      document.body.appendChild(printFrame);
+
+      const printDocument = printFrame.contentDocument;
+      const printWindow = printFrame.contentWindow;
+
+      if (!printDocument || !printWindow) {
+        printFrame.remove();
+
+        throw new Error("PRINT_FRAME_NOT_READY");
+      }
+
+      printDocument.open();
+
+      printDocument.write(`
+        <!doctype html>
+
+        <html lang="ar" dir="rtl">
+          <head>
+            <meta charset="utf-8" />
+
+            <title>${escapePrintValue(visitorName)}</title>
+
+            <style>
+              @page {
+                size: ${widthMm}mm ${heightMm}mm;
+                margin: 0;
+              }
+
+              *,
+              *::before,
+              *::after {
+                box-sizing: border-box;
+
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+
+              html,
+              body {
+                width: ${widthMm}mm !important;
+                height: ${heightMm}mm !important;
+
+                min-width: ${widthMm}mm !important;
+                min-height: ${heightMm}mm !important;
+
+                max-width: ${widthMm}mm !important;
+                max-height: ${heightMm}mm !important;
+
+                margin: 0 !important;
+                padding: 0 !important;
+
+                overflow: hidden !important;
+
+                background: #ffffff;
+              }
+
+              body {
+                position: relative;
+              }
+
+              .print-badge {
+                position: absolute;
+                inset: 0;
+
+                display: block;
+
+                width: ${widthMm}mm !important;
+                height: ${heightMm}mm !important;
+
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 0 !important;
+
+                object-fit: fill;
+                image-rendering: auto;
+              }
+
+              @media print {
+                html,
+                body {
+                  width: ${widthMm}mm !important;
+                  height: ${heightMm}mm !important;
+
+                  margin: 0 !important;
+                  padding: 0 !important;
+                }
+
+                .print-badge {
+                  width: ${widthMm}mm !important;
+                  height: ${heightMm}mm !important;
+
+                  transform: none !important;
+                }
+              }
+            </style>
+          </head>
+
+          <body>
+            <img
+              id="badge-image"
+              class="print-badge"
+              src="${badgeImage}"
+              alt=""
+            />
+          </body>
+        </html>
+      `);
+
+      printDocument.close();
+
+      const image = printDocument.getElementById(
+        "badge-image",
+      ) as HTMLImageElement | null;
+
+      if (image) {
+        await waitForImage(image);
+      }
+
+      await new Promise<void>((resolve) => {
+        printWindow.requestAnimationFrame(() => {
+          printWindow.requestAnimationFrame(() => resolve());
+        });
+      });
+
+      let removed = false;
+
+      const removeFrame = () => {
+        if (removed) {
+          return;
         }
 
-        const value = getFieldValue(fieldKey, data, visitor, qrImageUrl);
+        removed = true;
 
-        return buildFieldHtml({
-          fieldKey,
-          value,
-          layout,
-          qrImageUrl,
-          defaultTextColor: textColor,
-        });
-      })
-      .join("");
+        if (printFrame.isConnected) {
+          printFrame.remove();
+        }
+      };
 
-    const printWindow = window.open("", "_blank", "width=520,height=760");
+      printWindow.addEventListener("afterprint", removeFrame, {
+        once: true,
+      });
 
-    if (!printWindow) {
-      return;
+      window.setTimeout(removeFrame, 60_000);
+
+      printWindow.focus();
+      printWindow.print();
+    } catch (error) {
+      console.error("Could not print badge preview:", error);
     }
-
-    printWindow.document.open();
-
-    printWindow.document.write(`
-      <!doctype html>
-
-      <html lang="ar" dir="rtl">
-        <head>
-          <meta charset="utf-8" />
-
-          <title>${escapePrintValue(visitorName)}</title>
-
-          <style>
-            @page {
-              size: ${widthMm}mm ${heightMm}mm;
-              margin: 0;
-            }
-
-            * {
-              box-sizing: border-box;
-
-              -webkit-print-color-adjust: exact !important;
-              print-color-adjust: exact !important;
-            }
-
-            html,
-            body {
-              width: ${widthMm}mm;
-              height: ${heightMm}mm;
-
-              margin: 0;
-              padding: 0;
-
-              overflow: hidden;
-
-              background: #ffffff;
-
-              font-family: Arial, Tahoma, sans-serif;
-            }
-
-            .badge {
-              position: relative;
-
-              width: ${widthMm}mm;
-              height: ${heightMm}mm;
-
-              overflow: hidden;
-
-              background-color: ${escapeHtml(backgroundColor)};
-
-              ${
-                backgroundImageUrl
-                  ? `
-                    background-image: url("${escapeHtml(backgroundImageUrl)}");
-                    background-size: cover;
-                    background-position: center;
-                    background-repeat: no-repeat;
-                  `
-                  : ""
-              }
-            }
-
-            .badge-background {
-              position: absolute;
-              inset: 0;
-
-              width: 100%;
-              height: 100%;
-
-              object-fit: cover;
-
-              z-index: 0;
-            }
-
-            .badge-field {
-              position: absolute;
-              z-index: 2;
-            }
-
-            .text-field {
-              direction: rtl;
-              text-align: right;
-
-              display: flex;
-              align-items: center;
-              justify-content: flex-end;
-
-              min-height: 7mm;
-
-              overflow: hidden;
-
-              line-height: 1.15;
-
-              word-break: break-word;
-              overflow-wrap: anywhere;
-            }
-
-            .qr-field {
-              display: flex;
-              align-items: center;
-              justify-content: center;
-
-              background: #ffffff;
-
-              padding: 1mm;
-
-              overflow: hidden;
-            }
-
-            .qr-field img {
-              display: block;
-
-              width: 100%;
-              height: 100%;
-
-              object-fit: contain;
-            }
-          </style>
-        </head>
-
-        <body>
-          <div class="badge">
-            ${
-              backgroundImageUrl
-                ? `
-                  <img
-                    class="badge-background"
-                    src="${escapeHtml(backgroundImageUrl)}"
-                    alt=""
-                  />
-                `
-                : ""
-            }
-
-            ${fieldsHtml}
-          </div>
-
-          <script>
-            async function waitForImages() {
-              const images = Array.from(document.images);
-
-              await Promise.all(
-                images.map(function (image) {
-                  if (image.complete) {
-                    return Promise.resolve();
-                  }
-
-                  return new Promise(function (resolve) {
-                    image.addEventListener(
-                      "load",
-                      resolve,
-                      { once: true }
-                    );
-
-                    image.addEventListener(
-                      "error",
-                      resolve,
-                      { once: true }
-                    );
-                  });
-                })
-              );
-            }
-
-            window.addEventListener(
-              "load",
-              async function () {
-                await waitForImages();
-
-                window.setTimeout(function () {
-                  window.focus();
-                  window.print();
-                }, 150);
-              }
-            );
-          </script>
-        </body>
-      </html>
-    `);
-
-    printWindow.document.close();
   }
 
   return (
@@ -566,7 +564,7 @@ export function StaffBadgePreviewModal({
           </Button>
 
           <Button
-            onClick={printBadge}
+            onClick={() => void printBadge()}
             disabled={!template}
             style={{
               backgroundColor: theme.primary,
@@ -584,110 +582,178 @@ export function StaffBadgePreviewModal({
         </div>
       ) : (
         <div className="flex justify-center overflow-auto rounded-3xl bg-black/5 p-5">
+          {/*
+           * الغلاف الخارجي للمعاينة فقط.
+           * الظل والإطار لا يدخلان في الطباعة.
+           */}
           <div
-            className="relative shrink-0 overflow-hidden border border-black/15 shadow-xl"
+            className="shrink-0 border border-black/15 shadow-xl"
             style={{
               width: `${previewWidth}px`,
               height: `${previewHeight}px`,
-
-              backgroundColor,
-
-              backgroundImage: backgroundImageUrl
-                ? `url("${backgroundImageUrl}")`
-                : undefined,
-
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-              backgroundRepeat: "no-repeat",
             }}
           >
-            {selectedFieldKeys.map((fieldKey) => {
-              const layout = layoutFields[fieldKey];
+            {/*
+             * هذا العنصر هو الذي يتحول إلى PNG ويُطبع.
+             */}
+            <div
+              ref={badgePrintRef}
+              className="relative h-full w-full overflow-hidden"
+              style={{
+                backgroundColor,
 
-              if (!layout) {
-                return null;
-              }
+                backgroundImage: backgroundImageUrl
+                  ? `url("${backgroundImageUrl}")`
+                  : undefined,
 
-              const x = normalizeNumber(layout.x, 10) * previewScale;
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+                backgroundRepeat: "no-repeat",
+              }}
+            >
+              {selectedFieldKeys.map((fieldKey) => {
+                const layout = layoutFields[fieldKey];
 
-              const y = normalizeNumber(layout.y, 10) * previewScale;
+                if (!layout) {
+                  return null;
+                }
 
-              const width =
-                normalizeNumber(layout.width, isQrField(fieldKey) ? 26 : 70) *
-                previewScale;
+                const x = normalizeNumber(layout.x, 10) * previewScale;
 
-              if (isQrField(fieldKey)) {
-                const height =
-                  normalizeNumber(layout.height, 26) * previewScale;
+                const y = normalizeNumber(layout.y, 10) * previewScale;
+
+                const width =
+                  normalizeNumber(layout.width, isQrField(fieldKey) ? 26 : 70) *
+                  previewScale;
+
+                if (isQrField(fieldKey)) {
+                  const height =
+                    normalizeNumber(layout.height, 26) * previewScale;
+
+                  return (
+                    <div
+                      key={fieldKey}
+                      className="absolute z-10 grid place-items-center bg-white"
+                      style={{
+                        left: x,
+                        top: y,
+
+                        width,
+                        height,
+
+                        padding: Math.max(1, previewScale),
+                      }}
+                    >
+                      {qrImageUrl ? (
+                        <img
+                          src={qrImageUrl}
+                          alt="QR"
+                          className="h-full w-full object-contain"
+                          style={{
+                            imageRendering: "pixelated",
+                          }}
+                        />
+                      ) : (
+                        <span className="text-xs font-black">QR</span>
+                      )}
+                    </div>
+                  );
+                }
+
+                const isFullName = fieldKey === "fullName";
+
+                /*
+                 * fontSize في القالب يعتبر Point تقريبًا.
+                 *
+                 * 1pt = 0.3528mm
+                 * ثم نحوله إلى بكسل المعاينة باستخدام previewScale.
+                 */
+                const fontSize =
+                  normalizeNumber(layout.fontSize, 14) * previewScale * 0.3528;
+
+                /*
+                 * إذا لم يحدد الأدمن ارتفاعًا للحقل:
+                 * - الاسم الكامل يحصل على مساحة سطرين.
+                 * - باقي الحقول تحصل على مساحة سطر واحد.
+                 */
+                const heightMm = normalizeNumber(
+                  layout.height,
+                  isFullName ? 13 : 7,
+                );
+
+                const height = heightMm * previewScale;
+
+                const maxLines = getFieldMaxLines(fieldKey, layout);
+
+                const lineHeight = getFieldLineHeight(fieldKey, layout);
+
+                /*
+                 * الاسم يسمح له بالنزول إلى حجم أصغر حتى يظهر كاملًا.
+                 * الحقول الأخرى لا نصغرها كثيرًا.
+                 */
+                const minimumFontSize = Math.min(
+                  fontSize,
+
+                  Math.max(
+                    6 * previewScale * 0.3528,
+
+                    fontSize * (isFullName ? 0.46 : 0.62),
+                  ),
+                );
+
+                const bold =
+                  layout.bold === true ||
+                  layout.fontWeight === "bold" ||
+                  Number(layout.fontWeight) >= 700;
+
+                const fieldTextColor =
+                  (bold ? layout.boldColor : layout.textColor) ||
+                  layout.textColor ||
+                  textColor;
+
+                const value = getFieldValue(
+                  fieldKey,
+                  data,
+                  visitor,
+                  qrImageUrl,
+                );
+
+                const formattedValue = formatCustomValue(value);
+
+                const textAlign = getTextAlignment(layout);
 
                 return (
-                  <div
+                  <AutoFitBadgeText
                     key={fieldKey}
-                    className="absolute z-10 grid place-items-center bg-white p-1"
+                    text={formattedValue}
+                    maxFontSize={fontSize}
+                    minFontSize={minimumFontSize}
+                    maxLines={maxLines}
+                    lineHeight={lineHeight}
+                    className="absolute z-10"
                     style={{
                       left: x,
                       top: y,
+
                       width,
                       height,
+
+                      paddingInline: Math.max(2, previewScale * 0.65),
+
+                      color: fieldTextColor,
+
+                      fontWeight: bold ? 900 : layout.fontWeight || 700,
+
+                      textAlign,
+
+                      justifyContent: getJustifyContent(textAlign),
+
+                      direction: "rtl",
                     }}
-                  >
-                    {qrImageUrl ? (
-                      <img
-                        src={qrImageUrl}
-                        alt="QR"
-                        className="h-full w-full object-contain"
-                      />
-                    ) : (
-                      <span className="text-xs font-black">QR</span>
-                    )}
-                  </div>
+                  />
                 );
-              }
-
-              const fontSize =
-                normalizeNumber(layout.fontSize, 14) * previewScale * 0.3528;
-
-              const bold = layout.bold === true || layout.fontWeight === "bold";
-
-              const fieldTextColor =
-                (bold ? layout.boldColor : layout.textColor) ||
-                layout.textColor ||
-                textColor;
-
-              const value = getFieldValue(fieldKey, data, visitor, qrImageUrl);
-
-              return (
-                <div
-                  key={fieldKey}
-                  className="absolute z-10 flex items-center justify-end overflow-hidden text-right leading-tight"
-                  style={{
-                    left: x,
-                    top: y,
-                    width,
-
-                    minHeight: Math.max(fontSize * 1.45, 18),
-
-                    color: fieldTextColor,
-
-                    fontSize,
-                    fontWeight: bold ? 900 : 700,
-                  }}
-                >
-                  <span
-                    className="block w-full overflow-hidden break-words"
-                    style={{
-                      lineHeight: 1.15,
-
-                      display: "-webkit-box",
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: "vertical",
-                    }}
-                  >
-                    {formatCustomValue(value)}
-                  </span>
-                </div>
-              );
-            })}
+              })}
+            </div>
           </div>
         </div>
       )}

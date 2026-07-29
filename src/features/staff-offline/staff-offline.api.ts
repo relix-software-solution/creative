@@ -619,7 +619,13 @@ export async function syncOfflineStaffRegistration(
      */
     const responsePublicId = canonicalPublicId ?? undefined;
 
-    const effectiveQrToken = canonical.canonicalQrToken ?? signedOfflineQr;
+    /*
+     * عند وجود QR رسمي نستخدم Q2.
+     *
+     * عند عدم وجوده نستخدم O2 القصير،
+     * وليس signedOfflineQr الطويل.
+     */
+    const effectiveQrToken = canonical.canonicalQrToken ?? offlineQrToken;
 
     const duplicate = normalizeStatus(operationResult.status) === "DUPLICATE";
 

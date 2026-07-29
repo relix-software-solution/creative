@@ -58,7 +58,13 @@ function createCompactOfflineQrToken() {
 
   crypto.getRandomValues(bytes);
 
-  return bytesToBase64Url(bytes);
+  /*
+   * O2 تعني:
+   * Offline QR Reference - Version 2
+   *
+   * طول الرمز النهائي حوالي 25 محرفًا فقط.
+   */
+  return `O2.${bytesToBase64Url(bytes)}`;
 }
 
 function normalizeIssuedAt(value: string) {

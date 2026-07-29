@@ -29,6 +29,7 @@ import {
   StaffVisitorBadgeResponse,
   updateStaffVisitor,
   UpdateStaffVisitorPayload,
+  getStaffOfflineState,
 } from "@/features/staff-visitors/staff-visitors.api";
 import {
   StaffVisitor,
@@ -96,6 +97,8 @@ import {
   syncQueuedStaffVisitorUpdates,
   findCachedStaffVisitorByQr,
   saveCachedStaffVisitorQr,
+  cacheStaffBadgeTemplateForOffline,
+  setCachedStaffVisitorsServerRevision,
 } from "@/lib/offline/staff-scanner-db";
 import { useDeviceStore } from "@/stores/device-store";
 import { createOfflineQrImageDataUrl } from "@/lib/offline/staff-offline-qr-image";
@@ -127,6 +130,14 @@ export default function StaffScannerPage() {
 
   const [isSyncingQueue, setIsSyncingQueue] = useState(false);
   const isSyncingQueueRef = useRef(false);
+  const lastSyncAttemptAtRef = useRef(0);
+
+  const SYNC_COOLDOWN_MS = 2500;
+
+  type SyncOfflineQueueOptions = {
+    silent?: boolean;
+    force?: boolean;
+  };
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<ScannerControls | null>(null);
   const visitorResultRef = useRef<HTMLElement | null>(null);
@@ -141,6 +152,12 @@ export default function StaffScannerPage() {
   const lastVisitorsServerRefreshRef = useRef(0);
 
   const visitorsServerRefreshPromiseRef = useRef<Promise<void> | null>(null);
+
+  const lastOfflineStateCheckAtRef = useRef(0);
+
+  const offlineStateCheckPromiseRef = useRef<Promise<void> | null>(null);
+
+  const OFFLINE_STATE_CHECK_COOLDOWN_MS = 15_000;
 
   const [cachedVisitorsCount, setCachedVisitorsCount] = useState(0);
 
@@ -196,6 +213,10 @@ export default function StaffScannerPage() {
   const [visitorSearch, setVisitorSearch] = useState("");
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
+
+  const [createdVisitorForPrint, setCreatedVisitorForPrint] =
+    useState<StaffVisitor | null>(null);
+
   const [editModalOpen, setEditModalOpen] = useState(false);
 
   const [editingVisitor, setEditingVisitor] = useState<StaffVisitor | null>(
@@ -559,7 +580,21 @@ export default function StaffScannerPage() {
       setIsOnline(onlineNow);
 
       if (onlineNow && !lastKnownOnline) {
-        await syncOfflineQueue();
+        await syncOfflineQueue({
+          silent: true,
+          force: true,
+        });
+
+        await refreshOfflineServerState({
+          force: true,
+          silent: true,
+          refreshVisitors: true,
+        });
+      } else if (onlineNow) {
+        await refreshOfflineServerState({
+          silent: true,
+          refreshVisitors: true,
+        });
       }
 
       lastKnownOnline = onlineNow;
@@ -635,7 +670,9 @@ export default function StaffScannerPage() {
     if (!staffSession?.id && !cachedContext?.staffSessionId) return;
 
     const timer = window.setTimeout(() => {
-      void syncOfflineQueue();
+      void syncOfflineQueue({
+        silent: true,
+      });
     }, 900);
 
     return () => {
@@ -807,18 +844,16 @@ export default function StaffScannerPage() {
     if (!activeContext.eventId) return;
     if (!isReady) return;
 
-    const abortController = new AbortController();
-
     const timer = window.setTimeout(() => {
-      void refreshOfflineVisitorsCache({
+      void refreshOfflineServerState({
+        force: true,
         silent: true,
-        signal: abortController.signal,
+        refreshVisitors: true,
       });
     }, 1200);
 
     return () => {
       window.clearTimeout(timer);
-      abortController.abort();
     };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -970,7 +1005,9 @@ export default function StaffScannerPage() {
         setCachedContext(nextContext);
 
         window.setTimeout(() => {
-          void syncOfflineQueue();
+          void syncOfflineQueue({
+            silent: true,
+          });
         }, 500);
       },
 
@@ -1021,20 +1058,44 @@ export default function StaffScannerPage() {
     }
   }
 
-  async function syncOfflineQueue() {
+  async function syncOfflineQueue(options: SyncOfflineQueueOptions = {}) {
+    const silent = options.silent === true;
+    const force = options.force === true;
+
+    const now = Date.now();
+
     if (isSyncingQueueRef.current) {
       return;
     }
 
-    if (!navigator.onLine) {
-      toast.error("لا يوجد اتصال للمزامنة.");
+    if (!force && now - lastSyncAttemptAtRef.current < SYNC_COOLDOWN_MS) {
       return;
     }
 
-    // if (!isReady) {
-    //   toast.error("جلسة السكانر غير جاهزة للمزامنة بعد.");
-    //   return;
-    // }
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+    if (!onlineNow) {
+      if (!silent) {
+        toast.error("لا يوجد اتصال للمزامنة.", {
+          id: "staff-sync-no-connection",
+        });
+      }
+
+      return;
+    }
+
+    if (!isReady) {
+      if (!silent) {
+        toast.info("جلسة السكانر غير جاهزة للمزامنة بعد.", {
+          id: "staff-sync-not-ready",
+        });
+      }
+
+      return;
+    }
+
+    lastSyncAttemptAtRef.current = now;
 
     isSyncingQueueRef.current = true;
     setIsSyncingQueue(true);
@@ -1061,18 +1122,15 @@ export default function StaffScannerPage() {
       if (visitorResult.busy) {
         await refreshPendingCount();
 
-        toast.info("المزامنة جارية حاليًا في تبويب أو جهاز آخر.");
+        if (!silent) {
+          toast.info("المزامنة جارية حاليًا في تبويب أو جهاز آخر.", {
+            id: "staff-sync-busy",
+          });
+        }
 
         return;
       }
 
-      /*
-       * نعيد تحميل IndexedDB فورًا.
-       *
-       * syncQueuedVisitorRegistrations يستبدل:
-       * offline-visitor-* بالـID الرسمي،
-       * ويحدّث الحالة والـQR محليًا.
-       */
       if (
         visitorResult.synced > 0 ||
         visitorResult.failed > 0 ||
@@ -1089,9 +1147,14 @@ export default function StaffScannerPage() {
         await refreshPendingCount();
         await reloadCurrentVisitorResults();
 
-        toast.info(
-          "تمت معالجة التسجيلات، وتوجد مزامنة أخرى مسؤولة عن تعديلات الزوار.",
-        );
+        if (!silent) {
+          toast.info(
+            "تمت معالجة التسجيلات، وتوجد مزامنة أخرى مسؤولة عن تعديلات الزوار.",
+            {
+              id: "staff-sync-updates-busy",
+            },
+          );
+        }
 
         return;
       }
@@ -1113,22 +1176,14 @@ export default function StaffScannerPage() {
       });
 
       await refreshPendingCount();
-
-      /*
-       * نحدّث النتائج المحلية قبل تنزيل Snapshot جديد.
-       * هذا يمنع بقاء بطاقة React على نسخة قديمة.
-       */
       await reloadCurrentVisitorResults();
 
-      /*
-       * تنزيل Snapshot يتم بعد تحديث الواجهة المحلية.
-       * LOCAL_SYNCED يبقى محميًا عندك لمدة 24 ساعة،
-       * لذلك لن يختفي التسجيل بسبب تأخر Snapshot السيرفر.
-       */
       if (visitorResult.synced > 0 || visitorUpdateResult.synced > 0) {
         try {
-          await refreshOfflineVisitorsCache({
+          await refreshOfflineServerState({
+            force: true,
             silent: true,
+            refreshVisitors: true,
           });
 
           await reloadCurrentVisitorResults();
@@ -1141,9 +1196,14 @@ export default function StaffScannerPage() {
       }
 
       if (scanResult.busy) {
-        toast.info(
-          "تمت معالجة التسجيلات، وتوجد مزامنة أخرى مسؤولة عن السكانات.",
-        );
+        if (!silent) {
+          toast.info(
+            "تمت معالجة التسجيلات، وتوجد مزامنة أخرى مسؤولة عن السكانات.",
+            {
+              id: "staff-sync-scans-busy",
+            },
+          );
+        }
 
         return;
       }
@@ -1168,37 +1228,59 @@ export default function StaffScannerPage() {
         scanResult.skipped;
 
       if (total === 0 && skipped === 0) {
-        toast.info("لا توجد عمليات معلقة للمزامنة.");
+        if (!silent) {
+          toast.info("لا توجد عمليات معلقة للمزامنة.", {
+            id: "staff-sync-empty",
+          });
+        }
+
         return;
       }
 
       if (permanentFailed > 0) {
-        toast.error(
-          synced > 0
-            ? `تمت مزامنة ${synced} عملية، وتعذر نهائيًا رفع ${permanentFailed} عملية. راجع الهاتف والبريد المكررين.`
-            : `تعذر رفع ${permanentFailed} عملية نهائيًا. قد يكون الهاتف أو البريد مسجلًا مسبقًا.`,
-        );
+        if (!silent) {
+          toast.error(
+            synced > 0
+              ? `تمت مزامنة ${synced} عملية، وتعذر نهائيًا رفع ${permanentFailed} عملية. راجع الهاتف والبريد المكررين.`
+              : `تعذر رفع ${permanentFailed} عملية نهائيًا. قد يكون الهاتف أو البريد مسجلًا مسبقًا.`,
+            {
+              id: "staff-sync-permanent-failure",
+            },
+          );
+        }
 
         return;
       }
 
       if (retryableFailed > 0) {
-        toast.warning(
-          `تمت مزامنة ${synced} عملية، وستتم إعادة محاولة ${retryableFailed} عملية لاحقًا.`,
-        );
+        if (!silent) {
+          toast.warning(
+            `تمت مزامنة ${synced} عملية، وستتم إعادة محاولة ${retryableFailed} عملية لاحقًا.`,
+            {
+              id: "staff-sync-retryable-failure",
+            },
+          );
+        }
 
         return;
       }
 
       if (synced > 0) {
-        toast.success(`تمت مزامنة ${synced} عملية بنجاح.`);
+        if (!silent) {
+          toast.success(`تمت مزامنة ${synced} عملية بنجاح.`, {
+            id: "staff-sync-success",
+          });
+        }
 
         return;
       }
 
-      if (skipped > 0) {
+      if (skipped > 0 && !silent) {
         toast.warning(
           `تم تجاوز ${skipped} عملية لعدم اكتمال بياناتها المحلية.`,
+          {
+            id: "staff-sync-skipped",
+          },
         );
       }
     } catch (error) {
@@ -1207,7 +1289,11 @@ export default function StaffScannerPage() {
       await refreshPendingCount();
       await reloadCurrentVisitorResults();
 
-      toast.error("تعذر إكمال المزامنة المحلية.");
+      if (!silent) {
+        toast.error("تعذر إكمال المزامنة المحلية.", {
+          id: "staff-sync-error",
+        });
+      }
     } finally {
       isSyncingQueueRef.current = false;
       setIsSyncingQueue(false);
@@ -1662,6 +1748,111 @@ export default function StaffScannerPage() {
     await submitPayload(buildPayload(token));
   }
 
+  async function refreshOfflineServerState(options?: {
+    force?: boolean;
+    silent?: boolean;
+    refreshVisitors?: boolean;
+  }) {
+    const currentEventId = activeContext.eventId;
+
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+    if (!currentEventId || !isReady || !isOnline || !onlineNow) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (
+      !options?.force &&
+      now - lastOfflineStateCheckAtRef.current < OFFLINE_STATE_CHECK_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    if (offlineStateCheckPromiseRef.current) {
+      return offlineStateCheckPromiseRef.current;
+    }
+
+    const task = (async () => {
+      lastOfflineStateCheckAtRef.current = Date.now();
+
+      const state = await getStaffOfflineState();
+
+      if (state.eventId !== currentEventId) {
+        throw new Error("OFFLINE_STATE_EVENT_MISMATCH");
+      }
+
+      /*
+       * القالب يتحدث مباشرة، حتى لو لم تتغير قائمة الزوار.
+       */
+      await cacheStaffBadgeTemplateForOffline(
+        currentEventId,
+        state.badgeTemplate,
+      );
+
+      if (options?.refreshVisitors === false) {
+        return;
+      }
+
+      const snapshot = await getCachedStaffVisitorsSnapshot(currentEventId);
+
+      const visitorsChanged =
+        snapshot?.status !== "COMPLETED" ||
+        snapshot.serverRevision !== state.visitorsRevision;
+
+      if (!visitorsChanged) {
+        const count = await getCachedStaffVisitorsCount(currentEventId);
+
+        setCachedVisitorsCount(count);
+        setVisitorSnapshotTotal(state.visitorsCount);
+        setVisitorSnapshotStatus("COMPLETED");
+
+        return;
+      }
+
+      /*
+       * forceRestart لا يحذف المخزون القديم مباشرة.
+       *
+       * كود IndexedDB عندك يحتفظ بالنسخة السابقة،
+       * وينظفها فقط بعد اكتمال Snapshot الجديد.
+       */
+      await refreshOfflineVisitorsCache({
+        silent: true,
+        forceRestart: true,
+      });
+
+      const refreshedSnapshot =
+        await getCachedStaffVisitorsSnapshot(currentEventId);
+
+      if (refreshedSnapshot?.status === "COMPLETED") {
+        await setCachedStaffVisitorsServerRevision(
+          currentEventId,
+          state.visitorsRevision,
+        );
+      }
+
+      await reloadCurrentVisitorResults();
+    })();
+
+    offlineStateCheckPromiseRef.current = task;
+
+    try {
+      await task;
+    } catch (error) {
+      console.error("Could not refresh staff offline server state:", error);
+
+      if (!options?.silent) {
+        toast.error("تعذر التحقق من تحديثات مخزون الستاف.");
+      }
+    } finally {
+      if (offlineStateCheckPromiseRef.current === task) {
+        offlineStateCheckPromiseRef.current = null;
+      }
+    }
+  }
+
   async function refreshOfflineVisitorsCache(options?: {
     silent?: boolean;
     forceRestart?: boolean;
@@ -1769,73 +1960,11 @@ export default function StaffScannerPage() {
     force?: boolean;
     silent?: boolean;
   }) {
-    const currentEventId = activeContext.eventId;
-
-    const onlineNow =
-      typeof navigator === "undefined" ? isOnline : navigator.onLine;
-
-    if (!isOnline || !onlineNow || !isReady || !currentEventId) {
-      return;
-    }
-
-    const now = Date.now();
-
-    if (
-      !options?.force &&
-      now - lastVisitorsServerRefreshRef.current < 45_000
-    ) {
-      return;
-    }
-
-    if (visitorsServerRefreshPromiseRef.current) {
-      return visitorsServerRefreshPromiseRef.current;
-    }
-
-    const refreshTask = (async () => {
-      lastVisitorsServerRefreshRef.current = Date.now();
-
-      const snapshot = await getCachedStaffVisitorsSnapshot(currentEventId);
-
-      /*
-       * ممنوع حذف مخزن مكتمل أثناء التشغيل الطبيعي.
-       *
-       * إذا المخزن مكتمل نستخدمه كما هو.
-       * التسجيلات المنشأة من هذا الجهاز تُضاف مباشرة
-       * بواسطة cacheStaffVisitors.
-       */
-      if (snapshot?.status === "COMPLETED") {
-        const count = await getCachedStaffVisitorsCount(currentEventId);
-
-        setCachedVisitorsCount(count);
-        setVisitorSnapshotTotal(snapshot.totalCount);
-        setVisitorSnapshotStatus("COMPLETED");
-
-        await reloadCurrentVisitorResults();
-
-        return;
-      }
-
-      /*
-       * إذا التنزيل غير مكتمل نستكمله من cursor السابق.
-       * لا نبدأ من الصفر ولا نحذف البيانات الموجودة.
-       */
-      await refreshOfflineVisitorsCache({
-        silent: options?.silent ?? true,
-        forceRestart: false,
-      });
-
-      await reloadCurrentVisitorResults();
-    })();
-
-    visitorsServerRefreshPromiseRef.current = refreshTask;
-
-    try {
-      await refreshTask;
-    } finally {
-      if (visitorsServerRefreshPromiseRef.current === refreshTask) {
-        visitorsServerRefreshPromiseRef.current = null;
-      }
-    }
+    return refreshOfflineServerState({
+      force: options?.force,
+      silent: options?.silent,
+      refreshVisitors: true,
+    });
   }
 
   async function submitVisitorUpdate(
@@ -2028,7 +2157,7 @@ export default function StaffScannerPage() {
     });
   }
 
-  function openCreateModal() {
+  function resetCreateVisitorForm() {
     setRegisterForm({
       fullName: "",
       phone: "",
@@ -2036,15 +2165,34 @@ export default function StaffScannerPage() {
     });
 
     setRegisterAttendeeTypeId(defaultAttendeeType?.id || "");
+
     setRegisterCustomFields({});
+
     setRegisterErrors({});
+
+    /*
+     * إعادة الديالوغ من شاشة النجاح إلى فورم التسجيل.
+     */
+    setCreatedVisitorForPrint(null);
+  }
+
+  function openCreateModal() {
+    resetCreateVisitorForm();
+
     setCreateModalOpen(true);
   }
 
   function closeCreateModal() {
-    if (isRegistering) return;
+    if (isRegistering) {
+      return;
+    }
 
     setCreateModalOpen(false);
+
+    /*
+     * حتى يفتح الديالوغ لاحقًا على فورم جديد.
+     */
+    setCreatedVisitorForPrint(null);
   }
 
   function updateRegisterForm(
@@ -2267,7 +2415,7 @@ export default function StaffScannerPage() {
 
       try {
         offlineQrImageUrl = await createOfflineQrImageDataUrl(
-          secureOfflineQr.signedOfflineQr,
+          secureOfflineQr.offlineQrToken,
         );
       } catch (error) {
         console.error("Could not create offline QR image:", error);
@@ -2319,7 +2467,11 @@ export default function StaffScannerPage() {
         await getCachedStaffVisitorsCount(activeContext.eventId),
       );
 
-      setCreateModalOpen(false);
+      /*
+       * نبقي نفس الديالوغ مفتوحًا،
+       * لكن نحوله إلى شاشة نجاح تحتوي زر طباعة البادج.
+       */
+      setCreatedVisitorForPrint(visitor);
 
       setRawScanResult(null);
 
@@ -2405,12 +2557,11 @@ export default function StaffScannerPage() {
         typeof navigator === "undefined" ? isOnline : navigator.onLine;
 
       if (onlineAfterSave) {
-        /*
-         * نترك تحديثات React وIndexedDB تنتهي،
-         * ثم نبدأ المزامنة بالخلفية.
-         */
         window.setTimeout(() => {
-          void syncOfflineQueue();
+          void syncOfflineQueue({
+            silent: true,
+            force: true,
+          });
         }, 150);
       }
     } catch (error) {
@@ -2676,6 +2827,21 @@ export default function StaffScannerPage() {
     setPrintingVisitorId(registrationId);
 
     try {
+      const onlineNow =
+        typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+      if (isOnline && onlineNow) {
+        await refreshOfflineServerState({
+          force: true,
+          silent: true,
+
+          /*
+           * عند فتح البادج نحتاج القالب فورًا،
+           * ولا ننتظر تنزيل آلاف الزوار.
+           */
+          refreshVisitors: false,
+        });
+      }
       const cachedTemplate = await getCachedStaffBadgeTemplate(
         activeContext.eventId,
       );
@@ -3036,7 +3202,12 @@ export default function StaffScannerPage() {
               disabled={
                 !isOnline || !isReady || isSyncingQueue || pendingCount === 0
               }
-              onClick={() => void syncOfflineQueue()}
+              onClick={() =>
+                void syncOfflineQueue({
+                  silent: false,
+                  force: true,
+                })
+              }
             >
               {isSyncingQueue ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -3223,6 +3394,11 @@ export default function StaffScannerPage() {
         visibleFields={visibleRegisterFields}
         errors={registerErrors}
         isSubmitting={isRegistering}
+        createdVisitor={createdVisitorForPrint}
+        isPrintingCreatedVisitor={Boolean(
+          createdVisitorForPrint &&
+          printingVisitorId === createdVisitorForPrint.id,
+        )}
         onClose={closeCreateModal}
         onSubmit={submitRegisterForm}
         onAttendeeTypeChange={(value) => {
@@ -3232,6 +3408,12 @@ export default function StaffScannerPage() {
         }}
         onFormChange={updateRegisterForm}
         onCustomChange={updateRegisterCustomField}
+        /*
+         * تستعمل نفس تجهيز البادج الموجود أصلًا،
+         * وتعمل Online وOffline.
+         */
+        onPrintCreatedVisitor={printVisitorBadge}
+        onCreateAnother={resetCreateVisitorForm}
       />
 
       <StaffBadgePreviewModal

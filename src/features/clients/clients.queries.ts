@@ -2,14 +2,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   createClient,
-  deleteClient,
+  createClientAccessAccount,
+  createClientWithAccessAccount,
+  deleteClientPermanently,
+  getClientAccessAccount,
   getClients,
+  resetClientAccessAccountPassword,
+  setClientActiveStatus,
   updateClient,
+  updateClientAccessAccount,
 } from "./clients.api";
 import {
   ClientsListParams,
   ClientsListResponse,
   CreateClientPayload,
+  CreateClientWithAccessAccountPayload,
+  SaveClientAccessAccountPayload,
+  SetClientActiveStatusPayload,
   UpdateClientPayload,
 } from "./clients.types";
 
@@ -18,6 +27,9 @@ export const clientsKeys = {
   lists: () => [...clientsKeys.all, "list"] as const,
   list: (params: ClientsListParams) =>
     [...clientsKeys.lists(), params] as const,
+  accessAccounts: () => [...clientsKeys.all, "access-account"] as const,
+  accessAccount: (clientId: string) =>
+    [...clientsKeys.accessAccounts(), clientId] as const,
 };
 
 function getErrorMessage(error: unknown) {
@@ -58,6 +70,23 @@ export function useClients(params: ClientsListParams) {
   });
 }
 
+export function useClientAccessAccount(
+  clientId: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: clientsKeys.accessAccount(clientId ?? ""),
+    queryFn: () => getClientAccessAccount(clientId as string),
+    enabled: Boolean(clientId) && enabled,
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * محفوظ للتوافق مع أي شاشة قديمة.
+ */
 export function useCreateClient() {
   const queryClient = useQueryClient();
 
@@ -69,6 +98,31 @@ export function useCreateClient() {
 
       queryClient.invalidateQueries({
         queryKey: clientsKeys.lists(),
+      });
+    },
+
+    onError: (error) => {
+      toast.error(getErrorMessage(error));
+    },
+  });
+}
+
+export function useCreateClientWithAccessAccount() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: CreateClientWithAccessAccountPayload) =>
+      createClientWithAccessAccount(payload),
+
+    onSuccess: ({ client }) => {
+      toast.success("تم إنشاء العميل وحساب الدخول بنجاح");
+
+      queryClient.invalidateQueries({
+        queryKey: clientsKeys.lists(),
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: clientsKeys.accessAccount(client.id),
       });
     },
 
@@ -91,7 +145,7 @@ export function useUpdateClient() {
     }) => updateClient(id, payload),
 
     onSuccess: () => {
-      toast.success("تم تعديل العميل بنجاح");
+      toast.success("تم تعديل بيانات العميل بنجاح");
 
       queryClient.invalidateQueries({
         queryKey: clientsKeys.lists(),
@@ -104,14 +158,105 @@ export function useUpdateClient() {
   });
 }
 
-export function useDeleteClient() {
+export function useSaveClientAccessAccount() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (id: string) => deleteClient(id),
+    mutationFn: async ({
+      clientId,
+      accountExists,
+      account,
+      newPassword,
+    }: SaveClientAccessAccountPayload) => {
+      if (!accountExists) {
+        if (!newPassword) {
+          throw new Error("كلمة المرور مطلوبة لإنشاء حساب الدخول");
+        }
+
+        return createClientAccessAccount(clientId, {
+          fullName: account.fullName,
+          email: account.email,
+          phone: account.phone || undefined,
+          password: newPassword,
+        });
+      }
+
+      const updatedAccount = await updateClientAccessAccount(clientId, {
+        fullName: account.fullName,
+        email: account.email,
+        phone: account.phone || null,
+      });
+
+      if (newPassword) {
+        await resetClientAccessAccountPassword(clientId, newPassword);
+      }
+
+      return {
+        accessAccount: updatedAccount,
+      };
+    },
+
+    onSuccess: (_data, variables) => {
+      toast.success(
+        variables.accountExists
+          ? variables.newPassword
+            ? "تم تحديث حساب الدخول وكلمة المرور بنجاح"
+            : "تم تحديث حساب الدخول بنجاح"
+          : "تم إنشاء حساب الدخول للعميل بنجاح",
+      );
+
+      queryClient.invalidateQueries({
+        queryKey: clientsKeys.accessAccount(variables.clientId),
+      });
+    },
+
+    onError: (error, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: clientsKeys.accessAccount(variables.clientId),
+      });
+
+      toast.error(getErrorMessage(error));
+    },
+  });
+}
+
+export function useSetClientActiveStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, isActive }: SetClientActiveStatusPayload) =>
+      setClientActiveStatus(id, isActive),
+
+    onSuccess: ({ client }) => {
+      toast.success(
+        client.isActive
+          ? "تم تفعيل العميل بنجاح"
+          : "تم تعطيل العميل بنجاح",
+      );
+
+      queryClient.invalidateQueries({
+        queryKey: clientsKeys.lists(),
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: clientsKeys.accessAccount(client.id),
+      });
+    },
+
+    onError: (error) => {
+      toast.error(getErrorMessage(error));
+    },
+  });
+}
+
+export function useDeleteClientPermanently() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => deleteClientPermanently(id),
 
     onSuccess: ({ id }) => {
-      toast.success("تم حذف العميل بنجاح");
+      toast.success("تم حذف العميل نهائيًا");
 
       queryClient.setQueriesData<ClientsListResponse>(
         {
@@ -120,7 +265,9 @@ export function useDeleteClient() {
         (oldData) => {
           if (!oldData) return oldData;
 
-          const nextItems = oldData.items.filter((client) => client.id !== id);
+          const nextItems = oldData.items.filter(
+            (client) => client.id !== id,
+          );
           const currentTotal = oldData.total ?? oldData.items.length;
           const nextTotal = Math.max(currentTotal - 1, 0);
           const limit = oldData.limit || 20;
@@ -129,10 +276,15 @@ export function useDeleteClient() {
             ...oldData,
             items: nextItems,
             total: nextTotal,
-            totalPages: Math.max(Math.ceil(nextTotal / limit), 1),
+            totalPages:
+              nextTotal === 0 ? 0 : Math.ceil(nextTotal / limit),
           };
         },
       );
+
+      queryClient.removeQueries({
+        queryKey: clientsKeys.accessAccount(id),
+      });
 
       queryClient.invalidateQueries({
         queryKey: clientsKeys.lists(),

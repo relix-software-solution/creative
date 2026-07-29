@@ -30,6 +30,18 @@ export type StaffVisitorQrObject = {
   qrUrl?: string | null;
 
   status?: string | null;
+  /*
+   * رمز O2 القصير المطبوع لتسجيلات الستاف الأوفلاين.
+   */
+  offlineQrToken?: string | null;
+
+  /*
+   * التوقيع الكامل محفوظ للتحقق والمزامنة فقط.
+   * لا يُستخدم لتوليد صورة QR.
+   */
+  offlineSignedQr?: string | null;
+
+  canonicalQrToken?: string | null;
   validFrom?: string | null;
   validUntil?: string | null;
   generatedAt?: string | null;
@@ -70,7 +82,21 @@ export type StaffVisitor = {
   imageUrl?: string | null;
   publicUrl?: string | null;
 
+  /*
+   * رمز O2 القصير المستخدم لتوليد وطباعة QR
+   * الخاص بالتسجيل المحلي.
+   */
+  offlineQrToken?: string | null;
+
+  /*
+   * التوكن الكامل الموقّع محفوظ للمزامنة والتحقق،
+   * وليس لتوليد صورة QR.
+   */
   offlineSignedQr?: string | null;
+
+  /*
+   * رمز QR الرسمي المختصر القادم من الباك.
+   */
   canonicalQrToken?: string | null;
 
   qrLookupKeys?: string[];
@@ -92,6 +118,19 @@ export type StaffVisitorsResponse = {
   };
 };
 
+export type StaffOfflineStateResponse = {
+  eventId: string;
+
+  visitorsRevision: string;
+  visitorsCount: number;
+  visitorsUpdatedAt: string | null;
+
+  badgeTemplateRevision: string;
+  badgeTemplate: StaffBadgeTemplate | null;
+
+  generatedAt: string;
+};
+
 export type StaffVisitorsParams = {
   page?: number;
   limit?: number;
@@ -104,6 +143,8 @@ export type StaffVisitorsParams = {
 
 export type StaffVisitorQrResponse = {
   qrToken?: string | null;
+  compactQrToken?: string | null;
+  offlineQrToken?: string | null;
   token?: string | null;
   signedToken?: string | null;
   value?: string | null;
@@ -133,6 +174,9 @@ export type StaffBadgeTemplate = {
 
   colors?: Record<string, unknown> | null;
   layout?: Record<string, unknown> | null;
+
+  createdAt?: string | null;
+  updatedAt?: string | null;
 
   selectedFields?: string[] | BadgeTemplateSelectedField[] | null;
 };
@@ -284,6 +328,18 @@ export async function getStaffOfflineVisitorsSnapshot(
   });
 
   return unwrapApiData<StaffOfflineVisitorsSnapshotResponse>(response.data);
+}
+
+export async function getStaffOfflineState(signal?: AbortSignal) {
+  const response = await adminClient.get("/staff/visitors/offline-state", {
+    signal,
+
+    params: {
+      _ts: Date.now(),
+    },
+  });
+
+  return unwrapApiData<StaffOfflineStateResponse>(response.data);
 }
 
 export async function generateStaffVisitorQr(registrationId: string) {

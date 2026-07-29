@@ -57,15 +57,18 @@ export type CachedStaffVisitor = StaffVisitor & {
   offlineLocalId?: string | null;
   offlineOperationId?: string | null;
 
+  /*
+   * الرمز القصير المطبوع على البادج الأوفلاين.
+   */
+  offlineQrToken?: string | null;
+
+  /*
+   * الرمز الكامل الموقع، لا يُطبع.
+   */
   offlineSignedQr?: string | null;
+
   canonicalQrToken?: string | null;
 
-  /**
-   * جميع الرموز التي يمكن أن تشير إلى هذا الزائر:
-   * - Offline Signed QR
-   * - Canonical QR
-   * - Compact QR
-   */
   qrLookupKeys?: string[];
 
   updatedAt: string;
@@ -80,6 +83,8 @@ export type StaffVisitorsSnapshotStatus =
 
 export type CachedStaffVisitorsSnapshot = {
   eventId: string;
+
+  serverRevision?: string | null;
 
   snapshotId: string | null;
   snapshotAsOf: string | null;
@@ -571,6 +576,7 @@ function readAllQrTokens(value: unknown): string[] {
 
 function buildVisitorQrLookupKeys(
   visitor: StaffVisitor & {
+    offlineQrToken?: string | null;
     offlineSignedQr?: string | null;
     canonicalQrToken?: string | null;
   },
@@ -580,7 +586,16 @@ function buildVisitorQrLookupKeys(
       ...readAllQrTokens(visitor.qrToken),
       ...readAllQrTokens(visitor.qr),
 
+      /*
+       * الرمز القصير المطبوع.
+       */
+      ...readAllQrTokens(visitor.offlineQrToken),
+
+      /*
+       * الرمز الكامل القديم.
+       */
       ...readAllQrTokens(visitor.offlineSignedQr),
+
       ...readAllQrTokens(visitor.canonicalQrToken),
     ]),
   ];
@@ -804,7 +819,7 @@ function toStaffVisitorFromRegisterResponse(
       response.qr?.value,
       response.qr?.signedToken,
 
-      queued.signedOfflineQr,
+      queued.offlineQrToken,
     ) ?? "";
 
   const qrImageUrl =
@@ -1484,13 +1499,26 @@ export async function getCachedPublicEvent(eventId: string) {
   return staffScannerDb.eventCaches.get(eventId);
 }
 
-export async function cacheScannerAsset(url: string) {
+export async function cacheScannerAsset(
+  url: string,
+  options?: {
+    version?: string | null;
+  },
+) {
   if (!url || url.startsWith("data:")) {
     return null;
   }
 
-  const response = await fetch(url, {
-    cache: "reload",
+  const version = options?.version?.trim();
+
+  const requestUrl = version
+    ? `${url}${url.includes("?") ? "&" : "?"}staffCacheVersion=${encodeURIComponent(
+        version,
+      )}`
+    : url;
+
+  const response = await fetch(requestUrl, {
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -1575,6 +1603,29 @@ export async function getCachedStaffVisitorsSnapshot(eventId: string) {
   }
 
   return staffScannerDb.visitorSnapshots.get(eventId);
+}
+
+export async function setCachedStaffVisitorsServerRevision(
+  eventId: string,
+  serverRevision: string,
+) {
+  if (!eventId || !serverRevision) {
+    return;
+  }
+
+  const snapshot = await staffScannerDb.visitorSnapshots.get(eventId);
+
+  if (!snapshot) {
+    return;
+  }
+
+  await staffScannerDb.visitorSnapshots.put({
+    ...snapshot,
+
+    serverRevision,
+
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export async function clearCachedStaffVisitorsSnapshot(eventId: string) {
@@ -2817,17 +2868,29 @@ export async function addOfflineVisitorRegistration(options: {
 
     attendeeType: toStaffVisitorAttendeeType(options.attendeeType),
 
-    qrToken: options.signedOfflineQr,
+    /*
+     * الرمز الأساسي هو الرمز القصير المطبوع.
+     */
+    qrToken: options.offlineQrToken,
 
     qr: {
-      qrToken: options.signedOfflineQr,
+      qrToken: options.offlineQrToken,
+      token: options.offlineQrToken,
+      value: options.offlineQrToken,
 
-      token: options.signedOfflineQr,
+      /*
+       * نحتفظ بالتوكن الكامل كقيمة إضافية،
+       * لكن لا نستخدمه في صورة QR.
+       */
+      signedToken: options.signedOfflineQr,
 
       qrImageUrl: options.offlineQrImageUrl,
+      offlineQrToken: options.offlineQrToken,
 
+      offlineSignedQr: options.signedOfflineQr,
+
+      canonicalQrToken: null,
       imageUrl: options.offlineQrImageUrl,
-
       publicUrl: options.offlineQrImageUrl,
 
       status: "OFFLINE_PENDING",
@@ -2846,6 +2909,14 @@ export async function addOfflineVisitorRegistration(options: {
 
     offlineOperationId: options.operationId,
 
+    /*
+     * الرمز القصير الذي يجب استخدامه في صورة QR.
+     */
+    offlineQrToken: options.offlineQrToken,
+
+    /*
+     * الرمز الكامل يبقى للمزامنة والتحقق فقط.
+     */
     offlineSignedQr: options.signedOfflineQr,
 
     canonicalQrToken: null,
@@ -3089,13 +3160,18 @@ export async function syncQueuedVisitorRegistrations(options: {
            * canonicalQrToken يبقى محفوظًا كتوكن إضافي للسيرفر،
            * لكنه لا يستبدل التوكن المطبوع.
            */
-          const effectiveQrToken = queued.signedOfflineQr;
-
           const canonicalQrToken =
             firstString(
               syncMetadata.canonicalQrToken,
               readQrToken(syncedVisitor.qrToken),
             ) ?? null;
+
+          /*
+           * بعد المزامنة نستخدم QR الرسمي المختصر.
+           *
+           * عند عدم وصوله لأي سبب، نستخدم رمز O2 المختصر.
+           */
+          const effectiveQrToken = canonicalQrToken || queued.offlineQrToken;
 
           const generatedQrImageUrl = await generateLocalQrImage(
             effectiveQrToken,
@@ -3138,6 +3214,7 @@ export async function syncQueuedVisitorRegistrations(options: {
           cachedSyncedVisitor.offlineOperationId = queued.operationId;
 
           cachedSyncedVisitor.offlineSignedQr = queued.signedOfflineQr;
+          cachedSyncedVisitor.offlineQrToken = queued.offlineQrToken;
 
           cachedSyncedVisitor.canonicalQrToken = canonicalQrToken;
 
@@ -3299,13 +3376,15 @@ export async function saveCachedStaffBadgeTemplate(
   eventId: string,
   template: StaffBadgeTemplate | null | undefined,
 ) {
-  if (!eventId || !template) {
+  if (!eventId) {
     return;
   }
 
   await staffScannerDb.badgeTemplates.put({
     eventId,
-    template,
+
+    template: template ?? null,
+
     savedAt: new Date().toISOString(),
   });
 }
@@ -3322,7 +3401,13 @@ export async function cacheStaffBadgeTemplateForOffline(
   eventId: string,
   template: StaffBadgeTemplate | null | undefined,
 ) {
-  if (!eventId || !template) {
+  if (!eventId) {
+    return null;
+  }
+
+  if (!template) {
+    await saveCachedStaffBadgeTemplate(eventId, null);
+
     return null;
   }
 
@@ -3342,7 +3427,12 @@ export async function cacheStaffBadgeTemplateForOffline(
 
     if (online) {
       try {
-        const cachedAsset = await cacheScannerAsset(remoteBackgroundUrl);
+        const cachedAsset = await cacheScannerAsset(remoteBackgroundUrl, {
+          version:
+            typeof template.updatedAt === "string"
+              ? template.updatedAt
+              : String(template.updatedAt ?? ""),
+        });
 
         if (cachedAsset?.dataUrl) {
           cachedBackgroundDataUrl = cachedAsset.dataUrl;

@@ -306,7 +306,7 @@ export function StaffVisitorsPanel({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 pt-1">
+                  <div className="grid grid-cols-2 gap-2 pt-1">
                     <ActionButton
                       title="تعديل بيانات الزائر"
                       label=""
@@ -321,7 +321,7 @@ export function StaffVisitorsPanel({
                       <Pencil className="h-4 w-4" />
                     </ActionButton>
 
-                    <ActionButton
+                    {/* <ActionButton
                       title="عمل سكان لهذا الزائر"
                       label=""
                       disabled={isScanning || isGenerating || isPrinting}
@@ -337,7 +337,7 @@ export function StaffVisitorsPanel({
                       ) : (
                         <ScanLine className="h-4 w-4" />
                       )}
-                    </ActionButton>
+                    </ActionButton> */}
 
                     <ActionButton
                       title="معاينة وطباعة البادج"
@@ -360,105 +360,6 @@ export function StaffVisitorsPanel({
         </div>
       ) : null}
     </section>
-  );
-}
-
-function BadgePreview({ visitor }: { visitor: StaffVisitorWithBadge }) {
-  const badge = visitor.badge;
-  if (!badge) return null;
-
-  const widthMm = badge.widthMm || 90;
-  const heightMm = badge.heightMm || 120;
-  const ratio = heightMm / widthMm;
-
-  const previewWidth = 150;
-  const previewHeight = previewWidth * ratio;
-
-  return (
-    <div className="flex justify-center">
-      <div
-        className="relative overflow-hidden border border-black/10 bg-white shadow-sm"
-        style={{
-          width: previewWidth,
-          height: previewHeight,
-          borderRadius: 18,
-          backgroundColor: badge.colors?.background || "#fff",
-          color: badge.colors?.text || "#111827",
-        }}
-      >
-        {badge.backgroundImageUrl ? (
-          <img
-            src={resolveAssetUrl(badge.backgroundImageUrl)}
-            alt="Badge background"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        ) : null}
-
-        <div className="absolute inset-0">
-          {(badge.fields || []).map((field) => {
-            const layout = badge.layout?.fields?.[field.key] || {};
-            const isQr = field.key === "qrCode";
-
-            const left = ((layout.x || 0) / widthMm) * previewWidth;
-            const top = ((layout.y || 0) / heightMm) * previewHeight;
-            const fieldWidth = ((layout.width || 40) / widthMm) * previewWidth;
-            const fieldHeight =
-              ((layout.height || 10) / heightMm) * previewHeight;
-            const fontSize = Math.max(
-              ((layout.fontSize || 10) / 120) * previewHeight,
-              8,
-            );
-
-            if (isQr) {
-              const qrUrl =
-                typeof field.value === "string"
-                  ? field.value
-                  : visitor.qr?.relativePath || visitor.qr?.imageUrl || "";
-
-              return (
-                <div
-                  key={field.key}
-                  className="absolute grid place-items-center rounded-md bg-white p-1"
-                  style={{
-                    left,
-                    top,
-                    width: fieldWidth,
-                    height: fieldHeight,
-                  }}
-                >
-                  {qrUrl ? (
-                    <img
-                      src={resolveAssetUrl(qrUrl)}
-                      alt="QR"
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <span className="text-[9px] font-black">QR</span>
-                  )}
-                </div>
-              );
-            }
-
-            return (
-              <div
-                key={field.key}
-                className="absolute truncate text-right font-black"
-                style={{
-                  left,
-                  top,
-                  width: fieldWidth,
-                  fontSize,
-                  color: badge.colors?.text || "#111827",
-                }}
-                title={`${field.label}: ${formatBadgeValue(field.value)}`}
-              >
-                {formatBadgeValue(field.value)}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
   );
 }
 

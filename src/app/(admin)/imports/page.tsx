@@ -2,6 +2,10 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
   Eye,
   FileSpreadsheet,
   Loader2,
@@ -11,7 +15,8 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { SubmitHandler, useForm } from "react-hook-form";
+import { useForm } from "react-hook-form";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,29 +48,42 @@ import {
   useCreateRegistrationsImport,
   useImportRows,
   useImports,
+  usePreviewRegistrationsImport,
 } from "@/features/imports/imports.queries";
 import {
+  ImportDuplicateStrategy,
   ImportJob,
   ImportJobStatus,
+  ImportMapping,
+  ImportPreviewResponse,
   ImportRow,
   ImportRowStatus,
 } from "@/features/imports/imports.types";
 
-type PendingAction = "create" | null;
+type WizardStep = 1 | 2 | 3;
+type SystemMappingKey = Exclude<keyof ImportMapping, "customFields">;
 
-const importStatusLabels: Record<string, string> = {
+const importStatusLabels: Record<ImportJobStatus, string> = {
   PENDING: "بانتظار المعالجة",
   PROCESSING: "قيد المعالجة",
   COMPLETED: "مكتمل",
+  PARTIAL_FAILED: "مكتمل جزئيًا",
   FAILED: "فشل",
-  PARTIALLY_COMPLETED: "مكتمل جزئيًا",
+  CANCELLED: "ملغى",
 };
 
-const rowStatusLabels: Record<string, string> = {
+const rowStatusLabels: Record<ImportRowStatus, string> = {
   PENDING: "بانتظار المعالجة",
-  SUCCESS: "نجح",
+  PROCESSED: "تم الاستيراد",
   FAILED: "فشل",
+  DUPLICATE: "مكرر",
   SKIPPED: "متجاوز",
+};
+
+const duplicateStrategyLabels: Record<ImportDuplicateStrategy, string> = {
+  SKIP: "تجاوز السجلات المكررة",
+  FAIL: "اعتبار السجل المكرر فاشلًا",
+  UPDATE_EXISTING: "تحديث التسجيل الموجود",
 };
 
 function getImportStatusVariant(
@@ -74,18 +92,18 @@ function getImportStatusVariant(
   if (status === "COMPLETED") return "success";
   if (status === "PENDING" || status === "PROCESSING") return "warning";
   if (status === "FAILED") return "danger";
-  if (status === "PARTIALLY_COMPLETED") return "gold";
+  if (status === "PARTIAL_FAILED") return "gold";
   return "muted";
 }
 
 function getRowStatusVariant(
   status?: ImportRowStatus | null,
 ): "success" | "warning" | "danger" | "muted" | "gold" {
-  if (status === "SUCCESS") return "success";
+  if (status === "PROCESSED") return "success";
   if (status === "PENDING") return "warning";
   if (status === "FAILED") return "danger";
-  if (status === "SKIPPED") return "muted";
-  return "gold";
+  if (status === "DUPLICATE") return "gold";
+  return "muted";
 }
 
 function formatDate(value?: string | null) {
@@ -100,13 +118,17 @@ function formatDate(value?: string | null) {
   }).format(new Date(value));
 }
 
-function getFileName(job: ImportJob) {
-  return job.originalFileName || job.fileName || "ملف تسجيلات";
+function formatFileSize(value?: number | null) {
+  if (!value) return "—";
+
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function stringifyValue(value: unknown) {
   if (value === null || value === undefined) return "—";
-
   if (typeof value === "string") return value;
 
   try {
@@ -116,18 +138,31 @@ function stringifyValue(value: unknown) {
   }
 }
 
+function getFileName(job: ImportJob) {
+  return job.fileName || "ملف تسجيلات";
+}
+
 function getRowError(row: ImportRow) {
   if (row.errorMessage) return row.errorMessage;
-
-  if (Array.isArray(row.errors)) {
-    return row.errors.join("، ");
-  }
-
-  if (typeof row.errors === "string") {
-    return row.errors;
-  }
+  if (row.status === "DUPLICATE") return "التسجيل موجود مسبقًا";
 
   return "—";
+}
+
+function getMappedPreviewValue(
+  row: Record<string, unknown>,
+  mapping: ImportMapping,
+  key: SystemMappingKey,
+) {
+  const header = mapping[key];
+
+  if (!header) return "—";
+
+  const value = row[header];
+
+  return value === undefined || value === null || value === ""
+    ? "—"
+    : String(value);
 }
 
 export default function ImportsPage() {
@@ -142,10 +177,18 @@ export default function ImportsPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [rowsModalOpen, setRowsModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
-  const [pendingValues, setPendingValues] =
-    useState<RegistrationsImportFormValues | null>(null);
   const [selectedJob, setSelectedJob] = useState<ImportJob | null>(null);
+
+  const [wizardStep, setWizardStep] = useState<WizardStep>(1);
+  const [preview, setPreview] = useState<ImportPreviewResponse | null>(null);
+  const [mapping, setMapping] = useState<ImportMapping>({});
+  const [selectedSheetName, setSelectedSheetName] = useState("");
+  const [headerRow, setHeaderRow] = useState(1);
+  const [dataStartRow, setDataStartRow] = useState(2);
+  const [generateQr, setGenerateQr] = useState(true);
+  const [duplicateStrategy, setDuplicateStrategy] =
+    useState<ImportDuplicateStrategy>("SKIP");
+  const [externalIdPrefix, setExternalIdPrefix] = useState("");
 
   const importsParams = useMemo(
     () => ({
@@ -177,7 +220,7 @@ export default function ImportsPage() {
   });
 
   const rowsQuery = useImportRows(selectedJob?.id ?? "", rowsParams);
-
+  const previewMutation = usePreviewRegistrationsImport();
   const createImportMutation = useCreateRegistrationsImport();
 
   const form = useForm<RegistrationsImportFormValues>({
@@ -209,7 +252,51 @@ export default function ImportsPage() {
 
   const formAttendeeTypes = formAttendeeTypesQuery.data?.items ?? [];
 
+  const isAnalyzing = previewMutation.isPending;
   const isSubmitting = createImportMutation.isPending;
+
+  const headerOptions = useMemo(
+    () => [
+      { label: "غير مربوط", value: "" },
+      ...(preview?.headers.map((header) => ({
+        label: `${header.columnLetter} — ${header.label}`,
+        value: header.key,
+      })) ?? []),
+    ],
+    [preview],
+  );
+
+  const mappedHeaderKeys = useMemo(() => {
+    return new Set(
+      [
+        mapping.fullName,
+        mapping.phone,
+        mapping.email,
+        mapping.companyName,
+        mapping.jobTitle,
+        mapping.externalId,
+        mapping.notes,
+        mapping.attendeeTypeCode,
+        ...Object.values(mapping.customFields ?? {}),
+      ].filter((value): value is string => Boolean(value)),
+    );
+  }, [mapping]);
+
+  const unmappedHeaders =
+    preview?.headers.filter((header) => !mappedHeaderKeys.has(header.key)) ??
+    [];
+
+  function resetWizard() {
+    setWizardStep(1);
+    setPreview(null);
+    setMapping({});
+    setSelectedSheetName("");
+    setHeaderRow(1);
+    setDataStartRow(2);
+    setGenerateQr(true);
+    setDuplicateStrategy("SKIP");
+    setExternalIdPrefix("");
+  }
 
   function openUploadModal() {
     form.reset({
@@ -217,24 +304,18 @@ export default function ImportsPage() {
       attendeeTypeId: attendeeTypeFilter || "",
       file: undefined,
     });
-    setPendingValues(null);
-    setPendingAction(null);
+
+    resetWizard();
     setUploadModalOpen(true);
   }
 
-  function closeUploadModal() {
-    if (isSubmitting) return;
-    setUploadModalOpen(false);
-    setPendingValues(null);
-    setPendingAction(null);
-    form.reset();
-  }
+  function closeUploadModal(force = false) {
+    if (!force && (isSubmitting || isAnalyzing)) return;
 
-  function closeConfirm() {
-    if (isSubmitting) return;
+    setUploadModalOpen(false);
     setConfirmOpen(false);
-    setPendingValues(null);
-    setPendingAction(null);
+    form.reset();
+    resetWizard();
   }
 
   function openRowsModal(job: ImportJob) {
@@ -258,23 +339,117 @@ export default function ImportsPage() {
     setStatusFilter("");
   }
 
-  const requestSubmit: SubmitHandler<RegistrationsImportFormValues> = (
-    values,
-  ) => {
-    setPendingValues(values);
-    setPendingAction("create");
-    setConfirmOpen(true);
-  };
+  async function analyzeFile(useCurrentParser = false) {
+    const valid = await form.trigger();
 
-  function confirmAction() {
-    if (pendingAction !== "create" || !pendingValues) return;
+    if (!valid) return;
 
-    createImportMutation.mutate(pendingValues, {
-      onSuccess: () => {
-        closeConfirm();
-        closeUploadModal();
+    const values = form.getValues();
+
+    try {
+      const result = await previewMutation.mutateAsync({
+        eventId: values.eventId,
+        attendeeTypeId: values.attendeeTypeId,
+        file: values.file,
+        sheetName: useCurrentParser
+          ? selectedSheetName || undefined
+          : undefined,
+        headerRow: useCurrentParser ? headerRow : undefined,
+        dataStartRow: useCurrentParser ? dataStartRow : undefined,
+      });
+
+      setPreview(result);
+      setSelectedSheetName(result.selectedSheetName);
+      setHeaderRow(result.headerRow);
+      setDataStartRow(result.dataStartRow);
+      setMapping(result.suggestedMapping);
+      setWizardStep(2);
+    } catch {
+      // Mutation تعرض رسالة الخطأ.
+    }
+  }
+
+  function setSystemMapping(key: SystemMappingKey, value: string) {
+    setMapping((current) => ({
+      ...current,
+      [key]: value || undefined,
+    }));
+  }
+
+  function setCustomFieldMapping(key: string, value: string) {
+    setMapping((current) => ({
+      ...current,
+      customFields: {
+        ...(current.customFields ?? {}),
+        [key]: value,
       },
-    });
+    }));
+  }
+
+  function goToReview() {
+    if (!mapping.fullName) {
+      toast.error("اربط عمود الاسم الكامل قبل المتابعة.");
+      return;
+    }
+
+    const allMappedHeaders = [
+      mapping.fullName,
+      mapping.phone,
+      mapping.email,
+      mapping.companyName,
+      mapping.jobTitle,
+      mapping.externalId,
+      mapping.notes,
+      mapping.attendeeTypeCode,
+      ...Object.values(mapping.customFields ?? {}),
+    ].filter((value): value is string => Boolean(value));
+
+    const duplicateMappings = allMappedHeaders.filter(
+      (header, index, values) => values.indexOf(header) !== index,
+    );
+
+    if (duplicateMappings.length > 0) {
+      toast.warning("يوجد عمود واحد مربوط بأكثر من حقل. راجع الربط.");
+    }
+
+    setWizardStep(3);
+  }
+
+  function confirmImport() {
+    if (!preview || !mapping.fullName) {
+      toast.error("بيانات المعاينة أو ربط الاسم غير مكتملة.");
+      return;
+    }
+
+    setConfirmOpen(true);
+  }
+
+  function executeImport() {
+    const values = form.getValues();
+
+    if (!preview || !mapping.fullName) return;
+
+    createImportMutation.mutate(
+      {
+        eventId: values.eventId,
+        attendeeTypeId: values.attendeeTypeId,
+        file: values.file,
+        generateQr,
+        duplicateStrategy,
+        externalIdPrefix: externalIdPrefix.trim() || undefined,
+        mapping,
+        sheetName: selectedSheetName,
+        headerRow,
+        dataStartRow,
+      },
+      {
+        onSuccess: () => {
+          setConfirmOpen(false);
+          closeUploadModal(true);
+          setPage(1);
+        },
+      },
+    );
   }
 
   function getEventTitle(eventId: string) {
@@ -285,7 +460,9 @@ export default function ImportsPage() {
     );
   }
 
-  function getAttendeeTypeTitle(attendeeTypeId: string) {
+  function getAttendeeTypeTitle(attendeeTypeId?: string | null) {
+    if (!attendeeTypeId) return "حسب الملف / النوع الافتراضي";
+
     return (
       attendeeTypes.find((type) => type.id === attendeeTypeId)?.nameAr ||
       formAttendeeTypes.find((type) => type.id === attendeeTypeId)?.nameAr ||
@@ -295,12 +472,70 @@ export default function ImportsPage() {
     );
   }
 
+  function renderWizardFooter() {
+    if (wizardStep === 1) {
+      return (
+        <>
+          <Button
+            variant="outline"
+            onClick={() => closeUploadModal()}
+            disabled={isAnalyzing}
+          >
+            إلغاء
+          </Button>
+
+          <Button
+            onClick={() => void analyzeFile(false)}
+            disabled={isAnalyzing}
+          >
+            {isAnalyzing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Search className="h-4 w-4" />
+            )}
+            تحليل الملف
+          </Button>
+        </>
+      );
+    }
+
+    if (wizardStep === 2) {
+      return (
+        <>
+          <Button variant="outline" onClick={() => setWizardStep(1)}>
+            <ArrowRight className="h-4 w-4" />
+            السابق
+          </Button>
+
+          <Button onClick={goToReview}>
+            مراجعة نهائية
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <Button variant="outline" onClick={() => setWizardStep(2)}>
+          <ArrowRight className="h-4 w-4" />
+          تعديل الربط
+        </Button>
+
+        <Button onClick={confirmImport} disabled={isSubmitting}>
+          <UploadCloud className="h-4 w-4" />
+          بدء الاستيراد
+        </Button>
+      </>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Imports"
         title="استيراد التسجيلات"
-        description="رفع ملف CSV أو Excel لتسجيل عدد كبير من الحضور دفعة واحدة، مع متابعة النتائج والصفوف الفاشلة."
+        description="حلّل ملف CSV أو Excel، اربط أعمدته بحقول النظام، ثم راجع النتائج قبل بدء الاستيراد."
         actions={
           <Button onClick={openUploadModal}>
             <UploadCloud className="h-4 w-4" />
@@ -358,8 +593,7 @@ export default function ImportsPage() {
               <div>
                 <CardTitle>سجل عمليات الاستيراد</CardTitle>
                 <CardDescription>
-                  تابع حالة ملفات التسجيلات التي تم رفعها، وافتح تفاصيل الصفوف
-                  لمعرفة الناجح والفاشل.
+                  تابع الملفات، نتائج الصفوف، التسجيلات المكررة، وأخطاء التحقق.
                 </CardDescription>
               </div>
 
@@ -425,8 +659,9 @@ export default function ImportsPage() {
                   { label: "بانتظار المعالجة", value: "PENDING" },
                   { label: "قيد المعالجة", value: "PROCESSING" },
                   { label: "مكتمل", value: "COMPLETED" },
-                  { label: "مكتمل جزئيًا", value: "PARTIALLY_COMPLETED" },
+                  { label: "مكتمل جزئيًا", value: "PARTIAL_FAILED" },
                   { label: "فشل", value: "FAILED" },
+                  { label: "ملغى", value: "CANCELLED" },
                 ]}
               />
 
@@ -471,7 +706,7 @@ export default function ImportsPage() {
                   لا توجد عمليات استيراد بعد
                 </p>
                 <p className="mt-2 text-sm font-bold leading-6 text-[#4B4B4B]/60">
-                  ارفع ملف CSV أو Excel لإضافة تسجيلات كثيرة دفعة واحدة.
+                  ارفع الملف ثم راجع صف العناوين وربط الأعمدة قبل التنفيذ.
                 </p>
                 <Button className="mt-5" onClick={openUploadModal}>
                   <UploadCloud className="h-4 w-4" />
@@ -501,6 +736,7 @@ export default function ImportsPage() {
                         <div>
                           <p className="font-extrabold">{getFileName(job)}</p>
                           <p className="mt-1 text-xs font-bold text-[#4B4B4B]/45">
+                            {formatFileSize(job.fileSizeBytes)} —{" "}
                             {job.id.slice(0, 8)}
                           </p>
                         </div>
@@ -514,30 +750,27 @@ export default function ImportsPage() {
 
                       <TableCell>
                         <Badge variant={getImportStatusVariant(job.status)}>
-                          {importStatusLabels[job.status] || job.status || "—"}
+                          {importStatusLabels[job.status] || job.status}
                         </Badge>
                       </TableCell>
 
                       <TableCell>
-                        <div className="grid min-w-[180px] gap-1 text-xs font-bold text-[#4B4B4B]/60">
+                        <div className="grid min-w-[190px] gap-1 text-xs font-bold text-[#4B4B4B]/60">
                           <div className="flex justify-between">
                             <span>الإجمالي</span>
-                            <span>{job.totalRows ?? 0}</span>
+                            <span>{job.totalRows}</span>
                           </div>
-
                           <div className="flex justify-between text-emerald-700">
-                            <span>ناجح</span>
-                            <span>{job.successRows ?? 0}</span>
+                            <span>تم الاستيراد</span>
+                            <span>{job.successRows}</span>
                           </div>
-
+                          <div className="flex justify-between text-amber-700">
+                            <span>مكرر</span>
+                            <span>{job.duplicateRows}</span>
+                          </div>
                           <div className="flex justify-between text-red-700">
                             <span>فاشل</span>
-                            <span>{job.failedRows ?? 0}</span>
-                          </div>
-
-                          <div className="flex justify-between">
-                            <span>متجاوز</span>
-                            <span>{job.skippedRows ?? 0}</span>
+                            <span>{job.failedRows}</span>
                           </div>
                         </div>
                       </TableCell>
@@ -581,7 +814,6 @@ export default function ImportsPage() {
                   >
                     السابق
                   </Button>
-
                   <Button
                     variant="outline"
                     disabled={page >= totalPages}
@@ -598,139 +830,424 @@ export default function ImportsPage() {
 
       <Modal
         open={uploadModalOpen}
-        onClose={closeUploadModal}
-        title="رفع ملف تسجيلات"
-        description="اختر الفعالية ونوع الحضور ثم ارفع ملف CSV أو Excel يحتوي بيانات التسجيلات."
-        className="max-w-2xl"
-        footer={
-          <>
-            <Button
-              variant="outline"
-              onClick={closeUploadModal}
-              disabled={isSubmitting}
-            >
-              إلغاء
-            </Button>
-
-            <Button
-              onClick={form.handleSubmit(requestSubmit)}
-              disabled={isSubmitting}
-            >
-              متابعة الرفع
-            </Button>
-          </>
-        }
+        onClose={() => closeUploadModal()}
+        title="استيراد تسجيلات من ملف"
+        description={`المرحلة ${wizardStep} من 3 — ${
+          wizardStep === 1
+            ? "اختيار وتحليل الملف"
+            : wizardStep === 2
+              ? "ربط الأعمدة"
+              : "المراجعة النهائية"
+        }`}
+        className="max-w-6xl"
+        footer={renderWizardFooter()}
       >
-        <form
-          className="grid gap-4"
-          onSubmit={form.handleSubmit(requestSubmit)}
-        >
-          <Select
-            label="الفعالية"
-            value={form.watch("eventId")}
-            placeholder="اختر الفعالية"
-            error={form.formState.errors.eventId?.message}
-            onChange={(value) => {
-              form.setValue("eventId", value, {
-                shouldDirty: true,
-                shouldValidate: true,
-              });
-              form.setValue("attendeeTypeId", "", {
-                shouldDirty: true,
-                shouldValidate: true,
-              });
-            }}
-            options={events.map((event) => ({
-              label: event.titleAr,
-              value: event.id,
-            }))}
-          />
-
-          <Select
-            label="نوع الحضور"
-            value={form.watch("attendeeTypeId")}
-            placeholder="اختر نوع الحضور"
-            disabled={!form.watch("eventId")}
-            error={form.formState.errors.attendeeTypeId?.message}
-            onChange={(value) => {
-              form.setValue("attendeeTypeId", value, {
-                shouldDirty: true,
-                shouldValidate: true,
-              });
-            }}
-            options={formAttendeeTypes.map((type) => ({
-              label: type.nameAr,
-              value: type.id,
-            }))}
-          />
-
-          <div className="space-y-2">
-            <label className="text-sm font-extrabold text-[#4B4B4B]">
-              ملف التسجيلات
-            </label>
-
-            <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-[#A88042]/45 bg-[#A88042]/5 p-6 text-center transition hover:bg-[#A88042]/10">
-              <UploadCloud className="mb-3 h-9 w-9 text-[#A88042]" />
-
-              <p className="text-sm font-extrabold text-[#4B4B4B]">
-                {selectedFile?.name || "اضغط لاختيار ملف CSV أو Excel"}
-              </p>
-
-              <p className="mt-2 text-xs font-bold leading-6 text-[#4B4B4B]/50">
-                الصيغ المدعومة: CSV, XLS, XLSX
-              </p>
-
-              <input
-                type="file"
-                accept=".csv,.xls,.xlsx"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-
-                  if (!file) return;
-
-                  form.setValue("file", file, {
+        {wizardStep === 1 ? (
+          <form className="grid gap-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Select
+                label="الفعالية"
+                value={form.watch("eventId")}
+                placeholder="اختر الفعالية"
+                error={form.formState.errors.eventId?.message}
+                onChange={(value) => {
+                  form.setValue("eventId", value, {
                     shouldDirty: true,
                     shouldValidate: true,
                   });
+                  form.setValue("attendeeTypeId", "", {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  });
+                  setPreview(null);
                 }}
+                options={events.map((event) => ({
+                  label: event.titleAr,
+                  value: event.id,
+                }))}
               />
-            </label>
 
-            {form.formState.errors.file ? (
-              <p className="text-sm font-bold text-red-600">
-                {form.formState.errors.file.message}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
-            <p className="text-sm font-extrabold text-[#4B4B4B]">
-              الأعمدة المقترحة داخل الملف
-            </p>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {[
-                "fullName",
-                "phone",
-                "email",
-                "companyName",
-                "jobTitle",
-                "externalId",
-                "notes",
-              ].map((column) => (
-                <Badge key={column} variant="muted">
-                  {column}
-                </Badge>
-              ))}
+              <Select
+                label="نوع الحضور الافتراضي"
+                value={form.watch("attendeeTypeId")}
+                placeholder="اختر نوع الحضور"
+                disabled={!form.watch("eventId")}
+                error={form.formState.errors.attendeeTypeId?.message}
+                onChange={(value) => {
+                  form.setValue("attendeeTypeId", value, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  });
+                  setPreview(null);
+                }}
+                options={formAttendeeTypes.map((type) => ({
+                  label: `${type.nameAr} — ${type.code}`,
+                  value: type.id,
+                }))}
+              />
             </div>
 
-            <p className="mt-3 text-xs font-bold leading-6 text-[#4B4B4B]/55">
-              أي أعمدة إضافية ممكن يحفظها الباك داخل customFields حسب طريقة
-              المعالجة عندكم.
-            </p>
+            <div className="space-y-2">
+              <label className="text-sm font-extrabold text-[#4B4B4B]">
+                ملف التسجيلات
+              </label>
+
+              <label className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-[#A88042]/45 bg-[#A88042]/5 p-6 text-center transition hover:bg-[#A88042]/10">
+                <UploadCloud className="mb-3 h-9 w-9 text-[#A88042]" />
+                <p className="text-sm font-extrabold text-[#4B4B4B]">
+                  {selectedFile?.name || "اضغط لاختيار ملف CSV أو XLS أو XLSX"}
+                </p>
+                <p className="mt-2 text-xs font-bold leading-6 text-[#4B4B4B]/50">
+                  الحد الأعلى 20MB. لا يشترط أن تكون أسماء الأعمدة في أول صف.
+                </p>
+
+                <input
+                  type="file"
+                  accept=".csv,.xls,.xlsx"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+
+                    form.setValue("file", file, {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    });
+                    setPreview(null);
+                  }}
+                />
+              </label>
+
+              {form.formState.errors.file ? (
+                <p className="text-sm font-bold text-red-600">
+                  {form.formState.errors.file.message}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-bold leading-7 text-blue-800">
+              النظام سيقرأ أسماء الـSheets، يكتشف صف العناوين، يقترح ربط
+              الأعمدة، ويعرض أول الصفوف قبل إنشاء أي تسجيل.
+            </div>
+          </form>
+        ) : null}
+
+        {wizardStep === 2 && preview ? (
+          <div className="space-y-6">
+            <section className="grid gap-4 rounded-3xl border border-black/10 bg-[#F8F8FF] p-5 md:grid-cols-4">
+              <Select
+                label="ورقة Excel"
+                value={selectedSheetName}
+                onChange={setSelectedSheetName}
+                options={preview.sheets.map((sheet) => ({
+                  label: sheet,
+                  value: sheet,
+                }))}
+              />
+
+              <Input
+                label="رقم صف العناوين"
+                type="number"
+                min={1}
+                value={headerRow}
+                onChange={(event) => setHeaderRow(Number(event.target.value))}
+              />
+
+              <Input
+                label="أول صف بيانات"
+                type="number"
+                min={2}
+                value={dataStartRow}
+                onChange={(event) =>
+                  setDataStartRow(Number(event.target.value))
+                }
+              />
+
+              <div className="flex items-end">
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={isAnalyzing}
+                  onClick={() => void analyzeFile(true)}
+                >
+                  {isAnalyzing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                  إعادة التحليل
+                </Button>
+              </div>
+            </section>
+
+            <section className="grid gap-4 md:grid-cols-4">
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">الملف</p>
+                <p className="mt-2 truncate text-sm font-extrabold">
+                  {preview.file.name}
+                </p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">الورقة</p>
+                <p className="mt-2 text-sm font-extrabold">
+                  {preview.selectedSheetName}
+                </p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">
+                  صفوف البيانات
+                </p>
+                <p className="mt-2 text-2xl font-extrabold">
+                  {preview.totalRows}
+                </p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">
+                  صف العناوين المكتشف
+                </p>
+                <p className="mt-2 text-2xl font-extrabold">
+                  {preview.detectedHeaderRow}
+                </p>
+              </Card>
+            </section>
+
+            {preview.warnings.length > 0 ? (
+              <section className="space-y-2">
+                {preview.warnings.map((warning, index) => (
+                  <div
+                    key={`${warning.code}-${index}`}
+                    className={`rounded-2xl border p-4 text-sm font-bold leading-7 ${
+                      warning.severity === "ERROR"
+                        ? "border-red-200 bg-red-50 text-red-800"
+                        : warning.severity === "WARNING"
+                          ? "border-amber-200 bg-amber-50 text-amber-800"
+                          : "border-blue-200 bg-blue-50 text-blue-800"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-1 h-4 w-4 shrink-0" />
+                      <div>
+                        <p>{warning.message}</p>
+                        {warning.rowNumbers?.length ? (
+                          <p className="mt-1 text-xs opacity-75">
+                            الصفوف: {warning.rowNumbers.join("، ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
+            <section className="space-y-4">
+              <div>
+                <h3 className="text-lg font-extrabold text-[#4B4B4B]">
+                  حقول النظام
+                </h3>
+                <p className="mt-1 text-sm font-bold text-[#4B4B4B]/55">
+                  الاسم الكامل إلزامي. الهاتف اختياري في مسار الاستيراد فقط.
+                </p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {preview.availableFields.system.map((field) => (
+                  <Select
+                    key={field.key}
+                    label={`${field.labelAr}${field.required ? " *" : ""}`}
+                    value={mapping[field.key] ?? ""}
+                    placeholder="اختر عمود الملف"
+                    onChange={(value) => setSystemMapping(field.key, value)}
+                    options={headerOptions}
+                  />
+                ))}
+              </div>
+            </section>
+
+            {preview.availableFields.custom.length > 0 ? (
+              <section className="space-y-4">
+                <div>
+                  <h3 className="text-lg font-extrabold text-[#4B4B4B]">
+                    حقول الفعالية الإضافية
+                  </h3>
+                  <p className="mt-1 text-sm font-bold text-[#4B4B4B]/55">
+                    هذه الحقول مأخوذة مباشرة من إعدادات الفعالية ونوع الحضور.
+                  </p>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {preview.availableFields.custom.map((field) => (
+                    <Select
+                      key={field.key}
+                      label={`${field.labelAr}${field.required ? " *" : ""}`}
+                      value={mapping.customFields?.[field.key] ?? ""}
+                      placeholder="اختر عمود الملف"
+                      onChange={(value) =>
+                        setCustomFieldMapping(field.key, value)
+                      }
+                      options={headerOptions}
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <section className="grid gap-4 rounded-3xl border border-black/10 p-5 md:grid-cols-2">
+              <Select
+                label="سياسة السجلات المكررة"
+                value={duplicateStrategy}
+                onChange={(value) =>
+                  setDuplicateStrategy(value as ImportDuplicateStrategy)
+                }
+                options={Object.entries(duplicateStrategyLabels).map(
+                  ([value, label]) => ({ value, label }),
+                )}
+              />
+
+              <Input
+                label="بادئة المعرف الخارجي — اختياري"
+                value={externalIdPrefix}
+                placeholder="مثال: EXHIBITOR-"
+                onChange={(event) => setExternalIdPrefix(event.target.value)}
+              />
+
+              <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-black/10 bg-[#F8F8FF] p-4 md:col-span-2">
+                <input
+                  type="checkbox"
+                  checked={generateQr}
+                  onChange={(event) => setGenerateQr(event.target.checked)}
+                  className="h-5 w-5 accent-[#A88042]"
+                />
+                <div>
+                  <p className="text-sm font-extrabold text-[#4B4B4B]">
+                    تشغيل Registration Pipeline للتسجيلات المستوردة
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-[#4B4B4B]/55">
+                    اتركه مفعّلًا حتى يتم تجهيز QR والإشعارات وفق Pipeline
+                    الحالي.
+                  </p>
+                </div>
+              </label>
+            </section>
+
+            {unmappedHeaders.length > 0 ? (
+              <section className="rounded-2xl border border-black/10 bg-[#F8F8FF] p-4">
+                <p className="text-sm font-extrabold text-[#4B4B4B]">
+                  أعمدة غير مربوطة وسيتم تجاهلها
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {unmappedHeaders.map((header) => (
+                    <Badge key={header.key} variant="muted">
+                      {header.columnLetter} — {header.label}
+                    </Badge>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
-        </form>
+        ) : null}
+
+        {wizardStep === 3 && preview ? (
+          <div className="space-y-6">
+            <section className="grid gap-4 md:grid-cols-4">
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">
+                  عدد الصفوف
+                </p>
+                <p className="mt-2 text-2xl font-extrabold">
+                  {preview.totalRows}
+                </p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">
+                  نوع الحضور
+                </p>
+                <p className="mt-2 text-sm font-extrabold">
+                  {getAttendeeTypeTitle(form.getValues("attendeeTypeId"))}
+                </p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">المكرر</p>
+                <p className="mt-2 text-sm font-extrabold">
+                  {duplicateStrategyLabels[duplicateStrategy]}
+                </p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">
+                  Pipeline / QR
+                </p>
+                <p className="mt-2 text-sm font-extrabold">
+                  {generateQr ? "مفعّل" : "متوقف"}
+                </p>
+              </Card>
+            </section>
+
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold leading-7 text-emerald-800">
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="mt-1 h-4 w-4 shrink-0" />
+                <p>
+                  لن يتم إنشاء أي تسجيل قبل الضغط على «بدء الاستيراد». الجدول
+                  التالي معاينة من الملف فقط.
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-auto rounded-3xl border border-black/10">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>صف Excel</TableHead>
+                    <TableHead>الاسم الكامل</TableHead>
+                    <TableHead>الشركة</TableHead>
+                    <TableHead>المسمى الوظيفي</TableHead>
+                    <TableHead>الهاتف</TableHead>
+                    <TableHead>البريد</TableHead>
+                    <TableHead>المعرف الخارجي</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {preview.previewRows.map((row) => (
+                    <TableRow key={row.rowNumber}>
+                      <TableCell>{row.rowNumber}</TableCell>
+                      <TableCell className="font-extrabold">
+                        {getMappedPreviewValue(row.values, mapping, "fullName")}
+                      </TableCell>
+                      <TableCell>
+                        {getMappedPreviewValue(
+                          row.values,
+                          mapping,
+                          "companyName",
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {getMappedPreviewValue(row.values, mapping, "jobTitle")}
+                      </TableCell>
+                      <TableCell>
+                        {getMappedPreviewValue(row.values, mapping, "phone")}
+                      </TableCell>
+                      <TableCell>
+                        {getMappedPreviewValue(row.values, mapping, "email")}
+                      </TableCell>
+                      <TableCell>
+                        {(() => {
+                          const value = getMappedPreviewValue(
+                            row.values,
+                            mapping,
+                            "externalId",
+                          );
+
+                          return value === "—"
+                            ? "—"
+                            : `${externalIdPrefix}${value}`;
+                        })()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        ) : null}
       </Modal>
 
       <Modal
@@ -751,37 +1268,40 @@ export default function ImportsPage() {
       >
         <div className="space-y-5">
           {selectedJob ? (
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-5">
               <Card className="p-4">
                 <p className="text-xs font-bold text-[#4B4B4B]/55">
                   إجمالي الصفوف
                 </p>
-                <p className="mt-2 text-2xl font-extrabold text-[#4B4B4B]">
-                  {selectedJob.totalRows ?? 0}
+                <p className="mt-2 text-2xl font-extrabold">
+                  {selectedJob.totalRows}
                 </p>
               </Card>
-
               <Card className="p-4">
-                <p className="text-xs font-bold text-[#4B4B4B]/55">ناجح</p>
+                <p className="text-xs font-bold text-[#4B4B4B]/55">
+                  تم الاستيراد
+                </p>
                 <p className="mt-2 text-2xl font-extrabold text-emerald-700">
-                  {selectedJob.successRows ?? 0}
+                  {selectedJob.successRows}
                 </p>
               </Card>
-
+              <Card className="p-4">
+                <p className="text-xs font-bold text-[#4B4B4B]/55">مكرر</p>
+                <p className="mt-2 text-2xl font-extrabold text-amber-700">
+                  {selectedJob.duplicateRows}
+                </p>
+              </Card>
               <Card className="p-4">
                 <p className="text-xs font-bold text-[#4B4B4B]/55">فاشل</p>
                 <p className="mt-2 text-2xl font-extrabold text-red-700">
-                  {selectedJob.failedRows ?? 0}
+                  {selectedJob.failedRows}
                 </p>
               </Card>
-
               <Card className="p-4">
                 <p className="text-xs font-bold text-[#4B4B4B]/55">الحالة</p>
                 <div className="mt-2">
                   <Badge variant={getImportStatusVariant(selectedJob.status)}>
-                    {importStatusLabels[selectedJob.status] ||
-                      selectedJob.status ||
-                      "—"}
+                    {importStatusLabels[selectedJob.status]}
                   </Badge>
                 </div>
               </Card>
@@ -808,7 +1328,8 @@ export default function ImportsPage() {
                 }}
                 options={[
                   { label: "كل حالات الصفوف", value: "" },
-                  { label: "ناجح", value: "SUCCESS" },
+                  { label: "تم الاستيراد", value: "PROCESSED" },
+                  { label: "مكرر", value: "DUPLICATE" },
                   { label: "فشل", value: "FAILED" },
                   { label: "متجاوز", value: "SKIPPED" },
                   { label: "بانتظار المعالجة", value: "PENDING" },
@@ -825,12 +1346,7 @@ export default function ImportsPage() {
 
           {rowsQuery.isLoading ? (
             <div className="flex min-h-[260px] items-center justify-center rounded-[1.5rem] border border-black/10 bg-[#F8F8FF]">
-              <div className="text-center">
-                <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#A88042]" />
-                <p className="mt-3 text-sm font-bold text-[#4B4B4B]/60">
-                  جاري تحميل صفوف الاستيراد...
-                </p>
-              </div>
+              <Loader2 className="h-8 w-8 animate-spin text-[#A88042]" />
             </div>
           ) : rowsQuery.isError ? (
             <div className="rounded-[1.5rem] border border-red-200 bg-red-50 p-6 text-center">
@@ -859,8 +1375,9 @@ export default function ImportsPage() {
                   <TableRow>
                     <TableHead>رقم الصف</TableHead>
                     <TableHead>الحالة</TableHead>
-                    <TableHead>البيانات</TableHead>
-                    <TableHead>الأخطاء</TableHead>
+                    <TableHead>البيانات الأصلية</TableHead>
+                    <TableHead>البيانات المطبّعة</TableHead>
+                    <TableHead>الخطأ</TableHead>
                     <TableHead>Registration ID</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -868,26 +1385,32 @@ export default function ImportsPage() {
                 <TableBody>
                   {rows.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell>{row.rowNumber ?? "—"}</TableCell>
-
+                      <TableCell>{row.rowNumber}</TableCell>
                       <TableCell>
                         <Badge variant={getRowStatusVariant(row.status)}>
-                          {rowStatusLabels[row.status] || row.status || "—"}
+                          {rowStatusLabels[row.status] || row.status}
                         </Badge>
                       </TableCell>
-
                       <TableCell>
-                        <pre className="custom-scrollbar max-h-32 max-w-[360px] overflow-auto rounded-2xl bg-black p-3 text-left text-xs leading-5 text-white">
-                          {stringifyValue(row.data)}
+                        <pre className="custom-scrollbar max-h-36 max-w-[320px] overflow-auto rounded-2xl bg-black p-3 text-left text-xs leading-5 text-white">
+                          {stringifyValue(row.rawData)}
                         </pre>
                       </TableCell>
-
                       <TableCell>
-                        <p className="max-w-[260px] text-sm font-bold leading-6 text-red-700">
-                          {getRowError(row)}
-                        </p>
+                        <pre className="custom-scrollbar max-h-36 max-w-[320px] overflow-auto rounded-2xl bg-[#F8F8FF] p-3 text-left text-xs leading-5 text-[#4B4B4B]">
+                          {stringifyValue(row.normalizedData)}
+                        </pre>
                       </TableCell>
-
+                      <TableCell>
+                        <div className="max-w-[260px]">
+                          {row.errorCode ? (
+                            <Badge variant="danger">{row.errorCode}</Badge>
+                          ) : null}
+                          <p className="mt-2 text-sm font-bold leading-6 text-red-700">
+                            {getRowError(row)}
+                          </p>
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <Badge
                           variant={row.registrationId ? "success" : "muted"}
@@ -906,7 +1429,6 @@ export default function ImportsPage() {
                 <p className="text-sm font-bold text-[#4B4B4B]/55">
                   الصفحة {rowsPage} من {rowsTotalPages}
                 </p>
-
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
@@ -917,7 +1439,6 @@ export default function ImportsPage() {
                   >
                     السابق
                   </Button>
-
                   <Button
                     variant="outline"
                     disabled={rowsPage >= rowsTotalPages}
@@ -934,17 +1455,19 @@ export default function ImportsPage() {
 
       <ConfirmDialog
         open={confirmOpen}
-        title="تأكيد رفع ملف التسجيلات"
+        title="تأكيد بدء الاستيراد"
         description={
-          selectedFile
-            ? `سيتم رفع الملف ${selectedFile.name} وبدء عملية الاستيراد مباشرة.`
-            : "سيتم رفع الملف وبدء عملية الاستيراد مباشرة."
+          preview
+            ? `سيتم إنشاء Job لمعالجة ${preview.totalRows} صف من الملف ${preview.file.name}.`
+            : "سيتم بدء عملية الاستيراد."
         }
-        confirmText="تأكيد الرفع"
+        confirmText="بدء الاستيراد"
         variant="gold"
         isLoading={isSubmitting}
-        onClose={closeConfirm}
-        onConfirm={confirmAction}
+        onClose={() => {
+          if (!isSubmitting) setConfirmOpen(false);
+        }}
+        onConfirm={executeImport}
       />
     </div>
   );
