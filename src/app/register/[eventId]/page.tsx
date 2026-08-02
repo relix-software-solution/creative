@@ -429,58 +429,47 @@ function buildRegistrationPayload({
   fields: PublicRegistrationField[];
   fieldValues: Record<string, unknown>;
 }): PublicRegisterPayload {
-  const payload: PublicRegisterPayload = {
+  const customFields: Record<string, unknown> = {};
+
+  for (const field of fields) {
+    const value = fieldValues[field.key];
+
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    if (typeof value === "string") {
+      const trimmedValue = value.trim();
+
+      if (!trimmedValue) {
+        continue;
+      }
+
+      customFields[field.key] = trimmedValue;
+      continue;
+    }
+
+    if (Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+
+    /*
+     * false تبقى قيمة صحيحة للحقول BOOLEAN/CHECKBOX.
+     */
+    customFields[field.key] = value;
+  }
+
+  return {
     attendeeTypeId,
     fullName: baseForm.fullName.trim(),
     phone: normalizedPhone,
-    customFields: {},
+
+    ...(Object.keys(customFields).length > 0
+      ? {
+          customFields,
+        }
+      : {}),
   };
-
-  fields.forEach((field) => {
-    const value = fieldValues[field.key];
-    const normalizedKey = normalizeFieldKey(field.key);
-
-    if (normalizedKey === "email") {
-      payload.email = toOptionalString(value);
-      return;
-    }
-
-    if (normalizedKey === "companyname") {
-      payload.companyName = toOptionalString(value);
-      return;
-    }
-
-    if (normalizedKey === "jobtitle") {
-      payload.jobTitle = toOptionalString(value);
-      return;
-    }
-
-    if (normalizedKey === "externalid") {
-      payload.externalId = toOptionalString(value);
-      return;
-    }
-
-    if (normalizedKey === "notes") {
-      payload.notes = toOptionalString(value);
-      return;
-    }
-
-    if (value === undefined || value === null) {
-      return;
-    }
-
-    if (typeof value === "string" && !value.trim()) {
-      return;
-    }
-
-    payload.customFields![field.key] = value;
-  });
-
-  if (Object.keys(payload.customFields ?? {}).length === 0) {
-    delete payload.customFields;
-  }
-
-  return payload;
 }
 
 function BilingualLabel({
@@ -808,12 +797,6 @@ export default function RegisterPage() {
           payload.customFields,
           selectedAttendeeTypeId,
         );
-
-        successData.email ??= payload.email ?? null;
-        successData.companyName ??= payload.companyName ?? null;
-        successData.jobTitle ??= payload.jobTitle ?? null;
-        successData.externalId ??= payload.externalId ?? null;
-        successData.notes ??= payload.notes ?? null;
 
         successData.phone ||= validation.normalizedPhone;
 

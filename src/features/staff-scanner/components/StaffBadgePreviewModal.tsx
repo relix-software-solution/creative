@@ -66,6 +66,88 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function normalizeBadgeFieldKey(key: string) {
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_.:\-/]+/g, "");
+}
+
+function hasBadgeValue(value: unknown) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+
+  if (typeof value === "string") {
+    const normalizedValue = value.trim().toLowerCase();
+
+    if (!normalizedValue) {
+      return false;
+    }
+
+    /*
+     * هذه قيم Placeholder وليست بيانات حقيقية.
+     *
+     * الباك أو formatCustomValue قد يعيدان إحداها
+     * عند عدم وجود قيمة مباشرة في Registration.
+     */
+    const emptyPlaceholders = new Set([
+      "—",
+      "–",
+      "-",
+      "--",
+      "null",
+      "undefined",
+      "n/a",
+      "na",
+    ]);
+
+    return !emptyPlaceholders.has(normalizedValue);
+  }
+
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+
+  return true;
+}
+
+function firstBadgeValue(...values: unknown[]) {
+  return values.find((value) => hasBadgeValue(value));
+}
+
+function findCustomFieldValue(
+  customFields: Record<string, unknown> | null | undefined,
+  requestedKey: string,
+) {
+  if (!customFields) {
+    return undefined;
+  }
+
+  /*
+   * أولًا نحاول بالمفتاح نفسه.
+   */
+  if (requestedKey in customFields) {
+    return customFields[requestedKey];
+  }
+
+  /*
+   * ثم ندعم اختلاف كتابة المفاتيح:
+   *
+   * jobTitle
+   * job_title
+   * job-title
+   * job.title
+   */
+  const normalizedRequestedKey = normalizeBadgeFieldKey(requestedKey);
+
+  const matchingKey = Object.keys(customFields).find((customFieldKey) => {
+    return normalizeBadgeFieldKey(customFieldKey) === normalizedRequestedKey;
+  });
+
+  return matchingKey ? customFields[matchingKey] : undefined;
+}
+
 function getColor(
   colors: Record<string, unknown> | null | undefined,
   key: string,
@@ -126,7 +208,17 @@ function getBadgeFields(
 }
 
 function findField(fields: NormalizedBadgeField[], key: string) {
-  return fields.find((field) => field.key === key);
+  const exactField = fields.find((field) => field.key === key);
+
+  if (exactField) {
+    return exactField;
+  }
+
+  const normalizedKey = normalizeBadgeFieldKey(key);
+
+  return fields.find((field) => {
+    return normalizeBadgeFieldKey(field.key) === normalizedKey;
+  });
 }
 
 function getFieldValue(
@@ -135,66 +227,185 @@ function getFieldValue(
   visitor: StaffVisitor | null,
   qrImageUrl: string,
 ) {
+  /*
+   * أولًا: القيمة المحلولة من الباك.
+   * لا نعتمدها إذا كانت null أو فارغة.
+   */
   const fromResolvedFields = findField(getBadgeFields(data), key);
 
-  if (fromResolvedFields) {
-    return fromResolvedFields.value;
+  const resolvedFieldValue = fromResolvedFields?.value;
+
+  if (hasBadgeValue(resolvedFieldValue)) {
+    return resolvedFieldValue;
   }
 
-  const registration = data?.registration ?? visitor;
+  /*
+   * لا نستخدم:
+   *
+   * data?.registration ?? visitor
+   *
+   * لأن وجود registration من الباك كان يلغي visitor
+   * حتى لو كانت customFields موجودة فقط داخل visitor.
+   */
+  const serverRegistration = data?.registration ?? null;
+  const cachedVisitor = visitor ?? null;
 
+  /*
+   * الحقول الأساسية الحقيقية.
+   */
   const fixedValues: Record<string, unknown> = {
-    fullName: registration?.fullName,
-    phone: registration?.phone,
-    email: registration?.email,
-    publicId: registration?.publicId,
+    fullName: firstBadgeValue(
+      serverRegistration?.fullName,
+      cachedVisitor?.fullName,
+    ),
 
-    companyName: registration?.companyName,
-    jobTitle: registration?.jobTitle,
-    externalId: registration?.externalId,
+    phone: firstBadgeValue(serverRegistration?.phone, cachedVisitor?.phone),
 
-    "attendeeType.code": registration?.attendeeType?.code,
-    "attendeeType.nameAr": registration?.attendeeType?.nameAr,
-    "attendeeType.nameEn": registration?.attendeeType?.nameEn,
+    publicId: firstBadgeValue(
+      serverRegistration?.publicId,
+      cachedVisitor?.publicId,
+    ),
+
+    "attendeeType.code": firstBadgeValue(
+      serverRegistration?.attendeeType?.code,
+      cachedVisitor?.attendeeType?.code,
+    ),
+
+    "attendeeType.nameAr": firstBadgeValue(
+      serverRegistration?.attendeeType?.nameAr,
+      cachedVisitor?.attendeeType?.nameAr,
+    ),
+
+    "attendeeType.nameEn": firstBadgeValue(
+      serverRegistration?.attendeeType?.nameEn,
+      cachedVisitor?.attendeeType?.nameEn,
+    ),
 
     qrCode: qrImageUrl,
-    qrToken: data?.qr?.qrToken || data?.qr?.token || "",
+
+    qrToken: firstBadgeValue(data?.qr?.qrToken, data?.qr?.token),
   };
 
-  if (key in fixedValues) {
-    return fixedValues[key] ?? null;
+  if (key in fixedValues && hasBadgeValue(fixedValues[key])) {
+    return fixedValues[key];
   }
 
-  return registration?.customFields?.[key] ?? null;
+  /*
+   * الحقول الجديدة الديناميكية.
+   *
+   * نبحث أولًا داخل customFields القادمة من الباك،
+   * ثم داخل visitor الموجود في البحث أو IndexedDB.
+   */
+  const serverCustomFieldValue = findCustomFieldValue(
+    serverRegistration?.customFields,
+    key,
+  );
+
+  const cachedCustomFieldValue = findCustomFieldValue(
+    cachedVisitor?.customFields,
+    key,
+  );
+
+  const customFieldValue = firstBadgeValue(
+    serverCustomFieldValue,
+    cachedCustomFieldValue,
+  );
+
+  if (hasBadgeValue(customFieldValue)) {
+    return customFieldValue;
+  }
+
+  /*
+   * توافق مع التسجيلات القديمة التي كانت تخزن
+   * هذه القيم مباشرة داخل Registration.
+   */
+  const legacyValues: Record<string, unknown> = {
+    email: firstBadgeValue(serverRegistration?.email, cachedVisitor?.email),
+
+    companyName: firstBadgeValue(
+      serverRegistration?.companyName,
+      cachedVisitor?.companyName,
+    ),
+
+    jobTitle: firstBadgeValue(
+      serverRegistration?.jobTitle,
+      cachedVisitor?.jobTitle,
+    ),
+
+    externalId: firstBadgeValue(
+      serverRegistration?.externalId,
+      cachedVisitor?.externalId,
+    ),
+
+    notes: firstBadgeValue(serverRegistration?.notes, cachedVisitor?.notes),
+  };
+
+  if (key in legacyValues && hasBadgeValue(legacyValues[key])) {
+    return legacyValues[key];
+  }
+
+  return null;
 }
 
 function getSelectedFieldKeys(
   selectedFields: unknown,
   layoutFields: Record<string, BadgeFieldLayout>,
 ) {
-  if (Array.isArray(selectedFields)) {
-    const keys = selectedFields
-      .map((field) => {
-        if (typeof field === "string") {
-          return field;
-        }
+  const layoutKeys = Object.keys(layoutFields);
 
-        const record = asRecord(field);
-
-        if (!record || record.visible === false) {
-          return "";
-        }
-
-        return typeof record.key === "string" ? record.key : "";
-      })
-      .filter(Boolean);
-
-    if (keys.length > 0) {
-      return keys;
-    }
+  if (!Array.isArray(selectedFields)) {
+    return layoutKeys;
   }
 
-  return Object.keys(layoutFields);
+  const visibleKeys: string[] = [];
+  const mentionedKeys = new Set<string>();
+  const hiddenKeys = new Set<string>();
+
+  for (const field of selectedFields) {
+    if (typeof field === "string") {
+      const key = field.trim();
+
+      if (!key) {
+        continue;
+      }
+
+      mentionedKeys.add(key);
+      visibleKeys.push(key);
+
+      continue;
+    }
+
+    const record = asRecord(field);
+
+    const key = typeof record?.key === "string" ? record.key.trim() : "";
+
+    if (!key) {
+      continue;
+    }
+
+    mentionedKeys.add(key);
+
+    if (record?.visible === false) {
+      hiddenKeys.add(key);
+      continue;
+    }
+
+    visibleKeys.push(key);
+  }
+
+  /*
+   * بعض القوالب القديمة قد تحتوي الحقل داخل layout
+   * لكنه غير موجود داخل selectedFields.
+   *
+   * نعرضه ما دام لم يتم إخفاؤه صراحةً.
+   */
+  const legacyLayoutKeys = layoutKeys.filter((key) => {
+    return !mentionedKeys.has(key) && !hiddenKeys.has(key);
+  });
+
+  return [...new Set([...visibleKeys, ...legacyLayoutKeys])].filter((key) => {
+    return Boolean(layoutFields[key]);
+  });
 }
 
 function isQrField(key: string) {
@@ -227,25 +438,29 @@ function getJustifyContent(textAlign: "left" | "center" | "right") {
   return "flex-end";
 }
 
-function getFieldMaxLines(fieldKey: string, layout: BadgeFieldLayout): number {
-  const defaultLines = fieldKey === "fullName" ? 2 : 1;
+function getFieldMaxLines(_fieldKey: string, layout: BadgeFieldLayout): number {
+  /*
+   * جميع الحقول النصية يمكنها استخدام سطرين افتراضيًا.
+   * يمكن رفع العدد من إعدادات القالب عبر maxLines.
+   */
+  const defaultLines = 2;
 
   const configuredLines = Math.floor(
     normalizeNumber(layout.maxLines, defaultLines),
   );
 
-  return Math.min(4, Math.max(1, configuredLines));
+  return Math.min(6, Math.max(1, configuredLines));
 }
 
 function getFieldLineHeight(
-  fieldKey: string,
+  _fieldKey: string,
   layout: BadgeFieldLayout,
 ): number {
-  const defaultLineHeight = fieldKey === "fullName" ? 1.08 : 1.12;
+  const defaultLineHeight = 1.06;
 
   return Math.min(
-    1.6,
-    Math.max(0.9, normalizeNumber(layout.lineHeight, defaultLineHeight)),
+    1.5,
+    Math.max(0.85, normalizeNumber(layout.lineHeight, defaultLineHeight)),
   );
 }
 
@@ -672,13 +887,14 @@ export function StaffBadgePreviewModal({
                   normalizeNumber(layout.fontSize, 14) * previewScale * 0.3528;
 
                 /*
-                 * إذا لم يحدد الأدمن ارتفاعًا للحقل:
-                 * - الاسم الكامل يحصل على مساحة سطرين.
-                 * - باقي الحقول تحصل على مساحة سطر واحد.
+                 * نعطي جميع الحقول النصية مساحة مناسبة للاحتواء.
+                 *
+                 * عندما يكون layout.height محفوظًا في القالب،
+                 * تبقى القيمة المحفوظة هي المستخدمة.
                  */
                 const heightMm = normalizeNumber(
                   layout.height,
-                  isFullName ? 13 : 7,
+                  isFullName ? 13 : 10,
                 );
 
                 const height = heightMm * previewScale;
@@ -688,17 +904,12 @@ export function StaffBadgePreviewModal({
                 const lineHeight = getFieldLineHeight(fieldKey, layout);
 
                 /*
-                 * الاسم يسمح له بالنزول إلى حجم أصغر حتى يظهر كاملًا.
-                 * الحقول الأخرى لا نصغرها كثيرًا.
+                 * جميع الحقول، وليس الاسم فقط، يمكنها التصغير
+                 * تلقائيًا حتى تظهر القيمة كاملة داخل المساحة.
                  */
                 const minimumFontSize = Math.min(
                   fontSize,
-
-                  Math.max(
-                    6 * previewScale * 0.3528,
-
-                    fontSize * (isFullName ? 0.46 : 0.62),
-                  ),
+                  Math.max(5 * previewScale * 0.3528, fontSize * 0.42),
                 );
 
                 const bold =

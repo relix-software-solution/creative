@@ -245,26 +245,6 @@ function getSuccessFieldValue({
 }) {
   const normalizedKey = normalizeFieldKey(field.key);
 
-  if (normalizedKey === "email") {
-    return successData.email;
-  }
-
-  if (normalizedKey === "companyname") {
-    return successData.companyName;
-  }
-
-  if (normalizedKey === "jobtitle") {
-    return successData.jobTitle;
-  }
-
-  if (normalizedKey === "externalid") {
-    return successData.externalId;
-  }
-
-  if (normalizedKey === "notes") {
-    return successData.notes;
-  }
-
   return customFields[field.key];
 }
 

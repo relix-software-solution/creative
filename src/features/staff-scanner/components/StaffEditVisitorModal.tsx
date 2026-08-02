@@ -14,22 +14,100 @@ import { StaffScannerTheme } from "../utils/staff-scanner.types";
 type EditVisitorForm = {
   fullName: string;
   phone: string;
-  email: string;
-  companyName: string;
-  jobTitle: string;
-  notes: string;
 };
 
 function getFieldLabel(field: PublicRegistrationField) {
   return field.labelAr || field.labelEn || field.key;
 }
 
-function normalizeInitialCustomFields(visitor: StaffVisitor | null) {
-  if (!visitor?.customFields) {
+function normalizeFieldKey(key: string) {
+  return key.replace(/[\s_-]/g, "").toLowerCase();
+}
+
+function isBaseFieldKey(key: string) {
+  const normalizedKey = normalizeFieldKey(key);
+
+  return normalizedKey === "fullname" || normalizedKey === "phone";
+}
+
+type StaffVisitorWithLegacyDynamicFields = StaffVisitor & {
+  email?: string | null;
+  companyName?: string | null;
+  jobTitle?: string | null;
+  externalId?: string | null;
+  notes?: string | null;
+};
+
+function getLegacyDynamicFieldValue(
+  visitor: StaffVisitorWithLegacyDynamicFields,
+  fieldKey: string,
+) {
+  const normalizedKey = normalizeFieldKey(fieldKey);
+
+  if (normalizedKey === "email") {
+    return visitor.email;
+  }
+
+  if (normalizedKey === "company" || normalizedKey === "companyname") {
+    return visitor.companyName;
+  }
+
+  if (normalizedKey === "jobtitle" || normalizedKey === "position") {
+    return visitor.jobTitle;
+  }
+
+  if (normalizedKey === "externalid") {
+    return visitor.externalId;
+  }
+
+  if (normalizedKey === "notes") {
+    return visitor.notes;
+  }
+
+  return undefined;
+}
+
+function normalizeInitialCustomFields(
+  visitor: StaffVisitor | null,
+  registrationFields: PublicRegistrationField[],
+) {
+  if (!visitor) {
     return {};
   }
 
-  return { ...visitor.customFields };
+  const normalized: Record<string, unknown> = {
+    ...(visitor.customFields ?? {}),
+  };
+
+  const legacyVisitor = visitor as StaffVisitorWithLegacyDynamicFields;
+
+  /*
+   * دعم التسجيلات القديمة التي حُفظت فيها بعض
+   * الحقول الديناميكية كأعمدة أساسية.
+   */
+  for (const field of registrationFields) {
+    const currentValue = normalized[field.key];
+
+    if (
+      currentValue !== undefined &&
+      currentValue !== null &&
+      currentValue !== ""
+    ) {
+      continue;
+    }
+
+    const legacyValue = getLegacyDynamicFieldValue(legacyVisitor, field.key);
+
+    if (
+      legacyValue !== undefined &&
+      legacyValue !== null &&
+      legacyValue !== ""
+    ) {
+      normalized[field.key] = legacyValue;
+    }
+  }
+
+  return normalized;
 }
 
 export function StaffEditVisitorModal({
@@ -55,10 +133,6 @@ export function StaffEditVisitorModal({
   const [form, setForm] = useState<EditVisitorForm>({
     fullName: "",
     phone: "",
-    email: "",
-    companyName: "",
-    jobTitle: "",
-    notes: "",
   });
 
   const [customFields, setCustomFields] = useState<Record<string, unknown>>({});
@@ -72,15 +146,11 @@ export function StaffEditVisitorModal({
     setForm({
       fullName: visitor.fullName ?? "",
       phone: visitor.phone ?? "",
-      email: visitor.email ?? "",
-      companyName: visitor.companyName ?? "",
-      jobTitle: visitor.jobTitle ?? "",
-      notes: visitor.notes ?? "",
     });
 
-    setCustomFields(normalizeInitialCustomFields(visitor));
+    setCustomFields(normalizeInitialCustomFields(visitor, registrationFields));
     setErrors({});
-  }, [open, visitor]);
+  }, [open, visitor, registrationFields]);
 
   const editableCustomFields = useMemo(() => {
     if (!visitor) {
@@ -97,6 +167,10 @@ export function StaffEditVisitorModal({
         isActive?: boolean;
         visible?: boolean;
       };
+
+      if (isBaseFieldKey(field.key)) {
+        return false;
+      }
 
       if (fieldRecord.isActive === false || fieldRecord.visible === false) {
         return false;
@@ -156,12 +230,6 @@ export function StaffEditVisitorModal({
       nextErrors.phone = "رقم الهاتف مطلوب";
     }
 
-    const email = form.email.trim();
-
-    if (email && !/^\S+@\S+\.\S+$/.test(email)) {
-      nextErrors.email = "البريد الإلكتروني غير صحيح";
-    }
-
     for (const field of editableCustomFields) {
       const value = customFields[field.key];
 
@@ -197,10 +265,6 @@ export function StaffEditVisitorModal({
     await onSubmit(visitor, {
       fullName: form.fullName.trim(),
       phone: form.phone.trim(),
-      email: form.email.trim() || null,
-      companyName: form.companyName.trim(),
-      jobTitle: form.jobTitle.trim(),
-      notes: form.notes.trim(),
       customFields: cleanedCustomFields,
     });
   }
@@ -298,7 +362,7 @@ export function StaffEditVisitorModal({
             onChange={(value) => updateForm("phone", value)}
           />
 
-          <EditInput
+          {/* <EditInput
             label="البريد الإلكتروني"
             value={form.email}
             error={errors.email}
@@ -306,43 +370,21 @@ export function StaffEditVisitorModal({
             type="email"
             dir="ltr"
             onChange={(value) => updateForm("email", value)}
-          />
+          /> */}
 
-          <EditInput
+          {/* <EditInput
             label="اسم الشركة"
             value={form.companyName}
             disabled={isSubmitting}
             onChange={(value) => updateForm("companyName", value)}
-          />
+          /> */}
 
-          <EditInput
+          {/* <EditInput
             label="المسمى الوظيفي"
             value={form.jobTitle}
             disabled={isSubmitting}
             onChange={(value) => updateForm("jobTitle", value)}
-          />
-
-          <label className="block min-w-0">
-            <span
-              className="mb-1.5 block text-sm font-black"
-              style={{ color: theme.text }}
-            >
-              ملاحظات
-            </span>
-
-            <textarea
-              value={form.notes}
-              disabled={isSubmitting}
-              onChange={(event) => updateForm("notes", event.target.value)}
-              className="min-h-24 w-full resize-y rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-bold outline-none transition focus:ring-4 disabled:opacity-60"
-              style={
-                {
-                  color: theme.text,
-                  "--tw-ring-color": `${theme.primary}20`,
-                } as React.CSSProperties
-              }
-            />
-          </label>
+          /> */}
         </div>
 
         {editableCustomFields.length > 0 ? (
