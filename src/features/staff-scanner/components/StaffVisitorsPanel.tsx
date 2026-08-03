@@ -562,7 +562,7 @@ function printVisitorBadge(visitor: StaffVisitorWithBadge) {
             margin: 0;
             padding: 0;
             background: #fff;
-            font-family: Arial, Tahoma, sans-serif;
+            font-family: Arial, Tajawal, sans-serif;
           }
 
           .badge {

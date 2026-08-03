@@ -112,6 +112,20 @@ function hasBadgeValue(value: unknown) {
   return true;
 }
 
+function formatBadgePreviewValue(value: unknown) {
+  const isEmpty =
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim() === "") ||
+    (Array.isArray(value) && value.length === 0);
+
+  if (isEmpty) {
+    return "";
+  }
+
+  return formatCustomValue(value);
+}
+
 function firstBadgeValue(...values: unknown[]) {
   return values.find((value) => hasBadgeValue(value));
 }
@@ -929,7 +943,7 @@ export function StaffBadgePreviewModal({
                   qrImageUrl,
                 );
 
-                const formattedValue = formatCustomValue(value);
+                const formattedValue = formatBadgePreviewValue(value);
 
                 const textAlign = getTextAlignment(layout);
 

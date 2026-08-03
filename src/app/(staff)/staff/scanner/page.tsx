@@ -30,6 +30,8 @@ import {
   updateStaffVisitor,
   UpdateStaffVisitorPayload,
   getStaffOfflineState,
+  getStaffVisitors,
+  streamStaffVisitorRealtime,
 } from "@/features/staff-visitors/staff-visitors.api";
 import {
   StaffVisitor,
@@ -98,7 +100,8 @@ import {
   findCachedStaffVisitorByQr,
   saveCachedStaffVisitorQr,
   cacheStaffBadgeTemplateForOffline,
-  setCachedStaffVisitorsServerRevision,
+  cacheStaffVisitors,
+  syncStaffVisitorChanges,
 } from "@/lib/offline/staff-scanner-db";
 import { useDeviceStore } from "@/stores/device-store";
 import { createOfflineQrImageDataUrl } from "@/lib/offline/staff-offline-qr-image";
@@ -149,15 +152,14 @@ export default function StaffScannerPage() {
   const [isCachingVisitors, setIsCachingVisitors] = useState(false);
   const isCachingVisitorsRef = useRef(false);
 
-  const lastVisitorsServerRefreshRef = useRef(0);
-
-  const visitorsServerRefreshPromiseRef = useRef<Promise<void> | null>(null);
-
   const lastOfflineStateCheckAtRef = useRef(0);
 
   const offlineStateCheckPromiseRef = useRef<Promise<void> | null>(null);
 
-  const OFFLINE_STATE_CHECK_COOLDOWN_MS = 15_000;
+  const OFFLINE_STATE_CHECK_COOLDOWN_MS = 10_000;
+
+  const visitorChangesSyncPromiseRef = useRef<Promise<void> | null>(null);
+  const visitorChangesSyncRequestedRef = useRef(false);
 
   const [cachedVisitorsCount, setCachedVisitorsCount] = useState(0);
 
@@ -612,7 +614,7 @@ export default function StaffScannerPage() {
 
     const intervalId = window.setInterval(() => {
       void checkConnectionAndSync();
-    }, 5000);
+    }, 30_000);
 
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -631,6 +633,81 @@ export default function StaffScannerPage() {
     activeContext.deviceId,
     activeContext.staffSessionId,
   ]);
+
+  useEffect(() => {
+    if (!isOnline || !isReady || !activeContext.eventId) {
+      return;
+    }
+
+    let disposed = false;
+    let reconnectAttempt = 0;
+    let reconnectTimer: number | null = null;
+    let controller: AbortController | null = null;
+
+    async function connectRealtime() {
+      if (disposed || !navigator.onLine) {
+        return;
+      }
+
+      controller = new AbortController();
+
+      try {
+        await streamStaffVisitorRealtime({
+          signal: controller.signal,
+          onEvent: async (event) => {
+            if (event.eventId !== activeContext.eventId) {
+              return;
+            }
+
+            if (
+              event.type === "CONNECTED" ||
+              event.type === "VISITORS_CHANGED"
+            ) {
+              reconnectAttempt = 0;
+
+              await syncVisitorChangesFromServer({
+                silent: true,
+              });
+            }
+          },
+        });
+      } catch (error) {
+        if (controller.signal.aborted || disposed) {
+          return;
+        }
+
+        console.warn("Staff visitors realtime connection closed:", error);
+      }
+
+      if (disposed) {
+        return;
+      }
+
+      reconnectAttempt += 1;
+
+      const reconnectDelay = Math.min(
+        10_000,
+        750 * 2 ** Math.min(reconnectAttempt, 4),
+      );
+
+      reconnectTimer = window.setTimeout(() => {
+        void connectRealtime();
+      }, reconnectDelay);
+    }
+
+    void connectRealtime();
+
+    return () => {
+      disposed = true;
+      controller?.abort();
+
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+      }
+    };
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, isReady, activeContext.eventId]);
 
   useEffect(() => {
     if (!isOnline) return;
@@ -711,7 +788,7 @@ export default function StaffScannerPage() {
      * - أجهزة الستاف الأخرى
      * - عمليات الحذف
      */
-    const intervalId = window.setInterval(refreshWhenVisible, 60_000);
+    const intervalId = window.setInterval(refreshWhenVisible, 120_000);
 
     window.addEventListener("focus", refreshWhenVisible);
 
@@ -1748,6 +1825,95 @@ export default function StaffScannerPage() {
     await submitPayload(buildPayload(token));
   }
 
+  async function syncVisitorChangesFromServer(options?: {
+    silent?: boolean;
+    allowSnapshotRecovery?: boolean;
+  }) {
+    const currentEventId = activeContext.eventId;
+
+    if (!currentEventId || !isReady || !navigator.onLine) {
+      return;
+    }
+
+    /*
+     * عندما يصل إشعار SSE جديد أثناء مزامنة قائمة حالية لا نهمله.
+     * نسجل طلب جولة إضافية، ثم نعيد قراءة الـDelta فور انتهاء الجولة الحالية.
+     */
+    if (visitorChangesSyncPromiseRef.current) {
+      visitorChangesSyncRequestedRef.current = true;
+      return visitorChangesSyncPromiseRef.current;
+    }
+
+    const task = (async () => {
+      do {
+        visitorChangesSyncRequestedRef.current = false;
+
+        let result = await syncStaffVisitorChanges({
+          eventId: currentEventId,
+        });
+
+        if (
+          result.requiresSnapshot &&
+          options?.allowSnapshotRecovery !== false
+        ) {
+          await refreshOfflineVisitorsCache({
+            silent: true,
+            forceRestart: true,
+          });
+
+          result = await syncStaffVisitorChanges({
+            eventId: currentEventId,
+          });
+        }
+
+        if (result.requiresSnapshot) {
+          return;
+        }
+
+        const cachedCount = await getCachedStaffVisitorsCount(currentEventId);
+
+        setCachedVisitorsCount(cachedCount);
+        setVisitorSnapshotTotal(result.visitorsCount);
+        setVisitorSnapshotStatus("COMPLETED");
+
+        if (result.appliedChanges > 0) {
+          await reloadCurrentVisitorResults();
+        }
+      } while (
+        visitorChangesSyncRequestedRef.current &&
+        navigator.onLine &&
+        activeContext.eventId === currentEventId
+      );
+    })();
+
+    visitorChangesSyncPromiseRef.current = task;
+
+    try {
+      await task;
+    } catch (error) {
+      console.error("Could not synchronize visitor changes:", error);
+
+      if (!options?.silent) {
+        toast.error("تعذر مزامنة تغييرات الزوار.");
+      }
+    } finally {
+      if (visitorChangesSyncPromiseRef.current === task) {
+        const rerunRequested = visitorChangesSyncRequestedRef.current;
+
+        visitorChangesSyncPromiseRef.current = null;
+
+        if (
+          rerunRequested &&
+          navigator.onLine &&
+          activeContext.eventId === currentEventId
+        ) {
+          visitorChangesSyncRequestedRef.current = false;
+          void syncVisitorChangesFromServer({ silent: true });
+        }
+      }
+    }
+  }
+
   async function refreshOfflineServerState(options?: {
     force?: boolean;
     silent?: boolean;
@@ -1798,42 +1964,29 @@ export default function StaffScannerPage() {
 
       const snapshot = await getCachedStaffVisitorsSnapshot(currentEventId);
 
-      const visitorsChanged =
-        snapshot?.status !== "COMPLETED" ||
-        snapshot.serverRevision !== state.visitorsRevision;
+      if (snapshot?.status !== "COMPLETED") {
+        await refreshOfflineVisitorsCache({
+          silent: true,
+          forceRestart: true,
+        });
 
-      if (!visitorsChanged) {
+        await syncVisitorChangesFromServer({
+          silent: true,
+          allowSnapshotRecovery: false,
+        });
+
+        return;
+      }
+
+      if (snapshot.serverRevision !== state.visitorsRevision) {
+        await syncVisitorChangesFromServer({ silent: true });
+      } else {
         const count = await getCachedStaffVisitorsCount(currentEventId);
 
         setCachedVisitorsCount(count);
         setVisitorSnapshotTotal(state.visitorsCount);
         setVisitorSnapshotStatus("COMPLETED");
-
-        return;
       }
-
-      /*
-       * forceRestart لا يحذف المخزون القديم مباشرة.
-       *
-       * كود IndexedDB عندك يحتفظ بالنسخة السابقة،
-       * وينظفها فقط بعد اكتمال Snapshot الجديد.
-       */
-      await refreshOfflineVisitorsCache({
-        silent: true,
-        forceRestart: true,
-      });
-
-      const refreshedSnapshot =
-        await getCachedStaffVisitorsSnapshot(currentEventId);
-
-      if (refreshedSnapshot?.status === "COMPLETED") {
-        await setCachedStaffVisitorsServerRevision(
-          currentEventId,
-          state.visitorsRevision,
-        );
-      }
-
-      await reloadCurrentVisitorResults();
     })();
 
     offlineStateCheckPromiseRef.current = task;
@@ -1896,8 +2049,30 @@ export default function StaffScannerPage() {
         },
       });
 
-      setCachedVisitorsCount(result.downloadedCount);
-      setVisitorSnapshotTotal(result.totalCount);
+      let effectiveCachedCount = result.downloadedCount;
+      let effectiveTotal = result.totalCount;
+
+      if (result.completed) {
+        /*
+         * The snapshot cursor is captured at the beginning of the download.
+         * Apply every change that happened while its pages were downloading
+         * before declaring the local stock ready.
+         */
+        const deltaResult = await syncStaffVisitorChanges({
+          eventId: currentEventId,
+          signal: options?.signal,
+        });
+
+        if (!deltaResult.requiresSnapshot) {
+          effectiveCachedCount = await getCachedStaffVisitorsCount(
+            currentEventId,
+          );
+          effectiveTotal = deltaResult.visitorsCount;
+        }
+      }
+
+      setCachedVisitorsCount(effectiveCachedCount);
+      setVisitorSnapshotTotal(effectiveTotal);
       setVisitorSnapshotStatus(result.status);
 
       if (visitorSearch.trim().length >= 2) {
@@ -1913,7 +2088,7 @@ export default function StaffScannerPage() {
       if (!options?.silent) {
         if (result.completed) {
           toast.success(
-            `تم تجهيز مخزن الزوار: ${result.downloadedCount} زائر.`,
+            `تم تجهيز مخزن الزوار: ${effectiveCachedCount} زائر.`,
           );
         } else if (result.pausedOffline) {
           toast.info(
@@ -2090,6 +2265,41 @@ export default function StaffScannerPage() {
     setLastOfflineSaved(false);
     setVisitorSearch(term);
 
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+    if (isOnline && onlineNow) {
+      try {
+        /*
+         * Online search is server-first. A newly registered visitor can be
+         * found immediately even before the realtime delta reaches IndexedDB.
+         */
+        const serverSearch = await getStaffVisitors({
+          search: term,
+          limit: 20,
+        });
+
+        const serverItems = serverSearch.visitors.items ?? [];
+
+        if (serverItems.length > 0) {
+          await cacheStaffVisitors(
+            activeContext.eventId,
+            serverItems,
+            "CACHED",
+          );
+        }
+
+        setOfflineVisitorsData(serverSearch);
+
+        /* Catch up the durable local cache without blocking the result. */
+        void syncVisitorChangesFromServer({ silent: true });
+
+        return;
+      } catch (error) {
+        console.warn("Online visitor search failed; using local cache:", error);
+      }
+    }
+
     const cachedSearch = await searchCachedStaffVisitors(
       activeContext.eventId,
       term,
@@ -2098,11 +2308,15 @@ export default function StaffScannerPage() {
 
     setOfflineVisitorsData(cachedSearch as StaffVisitorsResponse);
 
-    const total = cachedSearch.visitors.total ?? 0;
-    if (total === 0 && isOnline && visitorSnapshotStatus !== "COMPLETED") {
-      toast.info("جاري تحميل الزوار لأول مرة ثم إعادة البحث.");
+    if (
+      (cachedSearch.visitors.total ?? 0) === 0 &&
+      isOnline &&
+      visitorSnapshotStatus !== "COMPLETED"
+    ) {
+      toast.info("جاري تجهيز مخزن الزوار ثم إعادة البحث.");
 
       await refreshOfflineVisitorsCache({ silent: true });
+      await syncVisitorChangesFromServer({ silent: true });
 
       const retrySearch = await searchCachedStaffVisitors(
         activeContext.eventId,

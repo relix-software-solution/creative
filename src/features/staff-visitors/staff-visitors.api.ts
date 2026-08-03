@@ -1,4 +1,6 @@
 import { adminClient } from "@/lib/api/admin-client";
+import { API_BASE_URL } from "@/lib/api/config";
+import { useAuthStore } from "@/stores/auth-store";
 import { unwrapApiData } from "@/lib/api/unwrap-api-data";
 import type { BadgeTemplateSelectedField } from "@/features/badge-templates/badge-templates.types";
 
@@ -206,6 +208,7 @@ export type StaffOfflineVisitorsSnapshotMetadata = {
   id: string;
   eventId: string;
   snapshotAsOf: string;
+  changeCursor: string;
 
   pageSize: number;
   returnedCount: number;
@@ -240,6 +243,43 @@ export type StaffOfflineVisitorsSnapshotResponse = {
 
   visitors: StaffVisitor[];
 };
+
+export type StaffVisitorChange = {
+  cursor: string;
+  operation: "UPSERT" | "DELETE" | string;
+  registrationId: string;
+  changedAt: string;
+  visitor: StaffVisitor | null;
+};
+
+export type StaffVisitorChangesResponse = {
+  eventId: string;
+  afterCursor: string;
+  nextCursor: string;
+  latestCursor: string;
+  hasMore: boolean;
+  visitorsCount: number;
+  changes: StaffVisitorChange[];
+};
+
+export type StaffVisitorRealtimeEvent =
+  | {
+      type: "CONNECTED";
+      eventId: string;
+      latestCursor: string;
+      connectedAt: string;
+    }
+  | {
+      type: "VISITORS_CHANGED";
+      eventId: string;
+      cursor: string;
+      changedAt: string;
+    }
+  | {
+      type: "HEARTBEAT";
+      eventId: string;
+      sentAt: string;
+    };
 
 export type StaffOfflineVisitorsSnapshotParams = {
   cursor?: string | null;
@@ -320,8 +360,12 @@ export async function getStaffOfflineVisitorsSnapshot(
   const response = await adminClient.get("/staff/visitors/offline-snapshot", {
     params: {
       limit: Math.min(Math.max(params.limit ?? 500, 50), 500),
-
       cursor: params.cursor?.trim() || undefined,
+    },
+
+    headers: {
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache",
     },
 
     signal: params.signal,
@@ -334,12 +378,136 @@ export async function getStaffOfflineState(signal?: AbortSignal) {
   const response = await adminClient.get("/staff/visitors/offline-state", {
     signal,
 
-    params: {
-      _ts: Date.now(),
+    headers: {
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache",
     },
   });
 
   return unwrapApiData<StaffOfflineStateResponse>(response.data);
+}
+
+export async function getStaffVisitorChanges(options: {
+  after?: string | null;
+  limit?: number;
+  signal?: AbortSignal;
+}) {
+  const response = await adminClient.get("/staff/visitors/changes", {
+    params: {
+      after: options.after?.trim() || "0",
+      limit: Math.min(Math.max(options.limit ?? 500, 1), 1000),
+    },
+
+    headers: {
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache",
+    },
+
+    signal: options.signal,
+  });
+
+  return unwrapApiData<StaffVisitorChangesResponse>(response.data);
+}
+
+function parseSseBlock(block: string) {
+  let eventName = "message";
+  let id = "";
+  const dataLines: string[] = [];
+
+  for (const rawLine of block.split(/\r?\n/)) {
+    if (!rawLine || rawLine.startsWith(":")) {
+      continue;
+    }
+
+    const separatorIndex = rawLine.indexOf(":");
+    const field =
+      separatorIndex >= 0 ? rawLine.slice(0, separatorIndex) : rawLine;
+    const rawValue =
+      separatorIndex >= 0 ? rawLine.slice(separatorIndex + 1) : "";
+    const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
+
+    if (field === "event") eventName = value;
+    if (field === "id") id = value;
+    if (field === "data") dataLines.push(value);
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  return { eventName, id, data: dataLines.join("\n") };
+}
+
+/**
+ * Authenticated SSE connection implemented with fetch so the Bearer token is
+ * sent in the Authorization header. The promise resolves when the stream
+ * closes and the caller is responsible for reconnecting.
+ */
+export async function streamStaffVisitorRealtime(options: {
+  signal: AbortSignal;
+  onEvent: (event: StaffVisitorRealtimeEvent) => void | Promise<void>;
+}) {
+  const accessToken = useAuthStore.getState().accessToken;
+
+  if (!accessToken) {
+    throw new Error("STAFF_REALTIME_AUTH_TOKEN_MISSING");
+  }
+
+  const response = await fetch(`${API_BASE_URL}/staff/visitors/realtime`, {
+    method: "GET",
+    headers: {
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${accessToken}`,
+      "Cache-Control": "no-cache",
+    },
+    cache: "no-store",
+    signal: options.signal,
+  });
+
+  if (response.status === 401) {
+    /* Trigger the normal Axios refresh-token path before reconnecting. */
+    await getStaffOfflineState(options.signal);
+    throw new Error("STAFF_REALTIME_ACCESS_TOKEN_REFRESHED");
+  }
+
+  if (!response.ok || !response.body) {
+    throw new Error(`STAFF_REALTIME_CONNECTION_FAILED_${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (!options.signal.aborted) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    buffer = buffer.replace(/\r\n/g, "\n");
+
+    let boundary = buffer.indexOf("\n\n");
+
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      const parsed = parseSseBlock(block);
+
+      if (parsed) {
+        try {
+          const payload = JSON.parse(parsed.data) as StaffVisitorRealtimeEvent;
+          await options.onEvent(payload);
+        } catch (error) {
+          console.warn("Ignored malformed staff realtime event:", error);
+        }
+      }
+
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
 }
 
 export async function generateStaffVisitorQr(registrationId: string) {

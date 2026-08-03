@@ -403,7 +403,7 @@ function createOfflineFallbackResponse() {
         padding: 24px;
         font-family:
           Arial,
-          Tahoma,
+          Tajawal,
           sans-serif;
         background:
           radial-gradient(

@@ -13,6 +13,7 @@ import {
 import { StaffOfflineSyncError } from "@/features/staff-offline/staff-offline.types";
 import {
   getStaffOfflineVisitorsSnapshot,
+  getStaffVisitorChanges,
   StaffBadgeTemplate,
   StaffVisitor,
   StaffVisitorAttendeeType,
@@ -88,6 +89,7 @@ export type CachedStaffVisitorsSnapshot = {
 
   snapshotId: string | null;
   snapshotAsOf: string | null;
+  changeCursor?: string | null;
 
   nextCursor: string | null;
 
@@ -349,6 +351,39 @@ class StaffScannerDatabase extends Dexie {
           visitor.qrLookupKeys = buildVisitorQrLookupKeys(visitor);
         });
       });
+
+    this.version(10)
+      .stores({
+        visitors:
+          "id, eventId, snapshotId, publicId, fullName, phone, email, status, attendeeTypeId, searchText, syncStatus, *qrLookupKeys, updatedAt",
+        visitorSnapshots:
+          "eventId, snapshotId, status, updatedAt, completedAt",
+      })
+      .upgrade(async (transaction) => {
+        const snapshotsTable = transaction.table("visitorSnapshots") as Table<
+          CachedStaffVisitorsSnapshot,
+          string
+        >;
+
+        await snapshotsTable.toCollection().modify((snapshot) => {
+          const legacyCursor =
+            snapshot.changeCursor ?? snapshot.serverRevision ?? "0";
+
+          /*
+           * الإصدارات القديمة خزنت Revision مركبًا مثل:
+           * eventId:count:updatedAt
+           *
+           * Delta API يقبل Cursor رقميًا فقط، لذلك نبدأ من الصفر مع إبقاء
+           * الـSnapshot المحلي الحالي بدل إجبار الموظف على تنزيله من جديد.
+           */
+          const normalizedCursor = /^\d+$/.test(String(legacyCursor).trim())
+            ? String(legacyCursor).trim()
+            : "0";
+
+          snapshot.changeCursor = normalizedCursor;
+          snapshot.serverRevision = normalizedCursor;
+        });
+      });
   }
 }
 
@@ -424,6 +459,12 @@ function normalizeSearchValue(value: unknown) {
     .toLowerCase()
     .trim()
     .replace(/\s+/g, " ");
+}
+
+function normalizeVisitorChangeCursor(value: unknown) {
+  const cursor = typeof value === "string" ? value.trim() : "";
+
+  return /^\d+$/.test(cursor) ? cursor : "0";
 }
 
 function parseDateMs(value: unknown) {
@@ -1115,6 +1156,7 @@ export type DownloadStaffVisitorsSnapshotResult = {
 
   snapshotId: string | null;
   snapshotAsOf: string | null;
+  changeCursor: string | null;
   nextCursor: string | null;
 };
 
@@ -1699,6 +1741,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
       snapshotId: existing?.snapshotId ?? null,
       snapshotAsOf: existing?.snapshotAsOf ?? null,
+      changeCursor: existing?.changeCursor ?? null,
       nextCursor: existing?.nextCursor ?? null,
     };
   }
@@ -1728,12 +1771,14 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
       snapshotId: existingSnapshot.snapshotId,
       snapshotAsOf: existingSnapshot.snapshotAsOf,
+      changeCursor: existingSnapshot.changeCursor ?? null,
       nextCursor: null,
     };
   }
 
   let snapshotId = existingSnapshot?.snapshotId ?? null;
   let snapshotAsOf = existingSnapshot?.snapshotAsOf ?? null;
+  let changeCursor = existingSnapshot?.changeCursor ?? null;
 
   let nextCursor = existingSnapshot?.nextCursor ?? null;
 
@@ -1747,6 +1792,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
     snapshotId,
     snapshotAsOf,
+    changeCursor,
 
     nextCursor,
 
@@ -1778,6 +1824,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
           snapshotId,
           snapshotAsOf,
+          changeCursor,
 
           nextCursor,
 
@@ -1819,6 +1866,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
           snapshotId,
           snapshotAsOf,
+          changeCursor,
           nextCursor,
         };
       }
@@ -1852,6 +1900,15 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
       snapshotId = response.snapshot.id;
       snapshotAsOf = response.snapshot.snapshotAsOf;
+
+      if (
+        changeCursor &&
+        response.snapshot.changeCursor !== changeCursor
+      ) {
+        throw new Error("SNAPSHOT_CHANGE_CURSOR_MISMATCH");
+      }
+
+      changeCursor = response.snapshot.changeCursor;
 
       if (typeof response.snapshot.totalCount === "number") {
         totalCount = response.snapshot.totalCount;
@@ -1903,6 +1960,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
             snapshotId,
             snapshotAsOf,
+            changeCursor,
 
             nextCursor: completed ? null : nextSnapshotCursor,
 
@@ -1950,6 +2008,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
           snapshotId,
           snapshotAsOf,
+          changeCursor,
           nextCursor: null,
         };
       }
@@ -1969,6 +2028,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
         snapshotId,
         snapshotAsOf,
+        changeCursor,
 
         nextCursor,
 
@@ -1999,6 +2059,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
         snapshotId,
         snapshotAsOf,
+        changeCursor,
         nextCursor,
       };
     }
@@ -2013,6 +2074,7 @@ export async function downloadStaffVisitorsSnapshot(options: {
 
       snapshotId,
       snapshotAsOf,
+      changeCursor,
 
       nextCursor,
 
@@ -2031,6 +2093,195 @@ export async function downloadStaffVisitorsSnapshot(options: {
     });
 
     throw error;
+  }
+}
+
+export type SyncStaffVisitorChangesResult = {
+  eventId: string;
+  appliedChanges: number;
+  deletedVisitors: number;
+  upsertedVisitors: number;
+  visitorsCount: number;
+  latestCursor: string;
+  nextCursor: string;
+  requiresSnapshot: boolean;
+};
+
+export async function applyStaffVisitorChanges(
+  eventId: string,
+  response: Awaited<ReturnType<typeof getStaffVisitorChanges>>,
+) {
+  if (response.eventId !== eventId) {
+    throw new Error("VISITOR_CHANGES_EVENT_MISMATCH");
+  }
+
+  const snapshot = await staffScannerDb.visitorSnapshots.get(eventId);
+
+  if (!snapshot || snapshot.status !== "COMPLETED") {
+    return {
+      appliedChanges: 0,
+      deletedVisitors: 0,
+      upsertedVisitors: 0,
+      requiresSnapshot: true,
+    };
+  }
+
+  let deletedVisitors = 0;
+  let upsertedVisitors = 0;
+
+  await staffScannerDb.transaction(
+    "rw",
+    staffScannerDb.visitors,
+    staffScannerDb.visitorSnapshots,
+    async () => {
+      for (const change of response.changes) {
+        if (change.operation === "DELETE") {
+          const existing = await staffScannerDb.visitors.get(
+            change.registrationId,
+          );
+
+          /* Never delete an unsynced local operation because of a server
+           * tombstone with a coincidentally matching ID. */
+          if (
+            existing &&
+            existing.syncStatus !== "LOCAL_PENDING" &&
+            existing.syncStatus !== "LOCAL_FAILED"
+          ) {
+            await staffScannerDb.visitors.delete(change.registrationId);
+            deletedVisitors += 1;
+          }
+
+          continue;
+        }
+
+        if (!change.visitor) {
+          continue;
+        }
+
+        const existing = await staffScannerDb.visitors.get(change.visitor.id);
+
+        /* A local pending edit contains newer device-side values. Keep it
+         * until its own update queue is synchronized. */
+        if (
+          existing?.syncStatus === "LOCAL_PENDING" ||
+          existing?.syncStatus === "LOCAL_FAILED"
+        ) {
+          continue;
+        }
+
+        const normalized = normalizeCachedVisitor(
+          eventId,
+          change.visitor,
+          "CACHED",
+          snapshot.snapshotId,
+        );
+
+        await staffScannerDb.visitors.put(normalized);
+        upsertedVisitors += 1;
+      }
+
+      const now = new Date().toISOString();
+
+      await staffScannerDb.visitorSnapshots.put({
+        ...snapshot,
+        changeCursor: response.nextCursor,
+        serverRevision: response.nextCursor,
+        downloadedCount: response.visitorsCount,
+        totalCount: response.visitorsCount,
+        status: "COMPLETED",
+        nextCursor: null,
+        updatedAt: now,
+        completedAt: snapshot.completedAt ?? now,
+        lastError: null,
+      });
+    },
+  );
+
+  return {
+    appliedChanges: response.changes.length,
+    deletedVisitors,
+    upsertedVisitors,
+    requiresSnapshot: false,
+  };
+}
+
+export async function syncStaffVisitorChanges(options: {
+  eventId: string;
+  signal?: AbortSignal;
+  limit?: number;
+}): Promise<SyncStaffVisitorChangesResult> {
+  const eventId = options.eventId.trim();
+  const snapshot = await staffScannerDb.visitorSnapshots.get(eventId);
+
+  if (!snapshot || snapshot.status !== "COMPLETED") {
+    return {
+      eventId,
+      appliedChanges: 0,
+      deletedVisitors: 0,
+      upsertedVisitors: 0,
+      visitorsCount: snapshot?.totalCount ?? 0,
+      latestCursor: normalizeVisitorChangeCursor(snapshot?.serverRevision),
+      nextCursor: normalizeVisitorChangeCursor(snapshot?.changeCursor),
+      requiresSnapshot: true,
+    };
+  }
+
+  let after = normalizeVisitorChangeCursor(
+    snapshot.changeCursor ?? snapshot.serverRevision,
+  );
+  let appliedChanges = 0;
+  let deletedVisitors = 0;
+  let upsertedVisitors = 0;
+  let visitorsCount = snapshot.totalCount ?? snapshot.downloadedCount;
+  let latestCursor = normalizeVisitorChangeCursor(
+    snapshot.serverRevision ?? after,
+  );
+
+  while (true) {
+    if (options.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
+    const response = await getStaffVisitorChanges({
+      after,
+      limit: options.limit ?? 500,
+      signal: options.signal,
+    });
+
+    const applied = await applyStaffVisitorChanges(eventId, response);
+
+    if (applied.requiresSnapshot) {
+      return {
+        eventId,
+        appliedChanges,
+        deletedVisitors,
+        upsertedVisitors,
+        visitorsCount,
+        latestCursor,
+        nextCursor: after,
+        requiresSnapshot: true,
+      };
+    }
+
+    appliedChanges += applied.appliedChanges;
+    deletedVisitors += applied.deletedVisitors;
+    upsertedVisitors += applied.upsertedVisitors;
+    visitorsCount = response.visitorsCount;
+    latestCursor = response.latestCursor;
+    after = response.nextCursor;
+
+    if (!response.hasMore) {
+      return {
+        eventId,
+        appliedChanges,
+        deletedVisitors,
+        upsertedVisitors,
+        visitorsCount,
+        latestCursor,
+        nextCursor: after,
+        requiresSnapshot: false,
+      };
+    }
   }
 }
 
@@ -2123,7 +2374,29 @@ export async function cacheStaffVisitors(
     normalizeCachedVisitor(eventId, visitor, syncStatus, null),
   );
 
-  await bulkPutVisitorsInChunks(cachedVisitors);
+  const existingVisitors = await staffScannerDb.visitors.bulkGet(
+    cachedVisitors.map((visitor) => visitor.id),
+  );
+
+  const safeVisitors = cachedVisitors.map((visitor, index) => {
+    const existing = existingVisitors[index];
+
+    /*
+     * نتيجة بحث Online لا يجوز أن تكتب فوق تعديل محلي لم يصل إلى السيرفر
+     * بعد. Delta sync سيستبدل السجل بعد نجاح طابور التعديل.
+     */
+    if (
+      existing?.eventId === eventId &&
+      (existing.syncStatus === "LOCAL_PENDING" ||
+        existing.syncStatus === "LOCAL_FAILED")
+    ) {
+      return existing;
+    }
+
+    return visitor;
+  });
+
+  await bulkPutVisitorsInChunks(safeVisitors);
 }
 
 export async function searchCachedStaffVisitors(
