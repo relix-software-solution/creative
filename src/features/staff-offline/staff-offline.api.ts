@@ -135,6 +135,13 @@ function normalizeOperationResult(
 
     errorCode: error.code ?? null,
     errorMessage: error.message ?? null,
+
+    retryable:
+      typeof operation.retryable === "boolean"
+        ? operation.retryable
+        : typeof output.retryable === "boolean"
+          ? output.retryable
+          : null,
   };
 }
 
@@ -313,6 +320,56 @@ function assertRequiredString(
   return value.trim();
 }
 
+function isRetryableOperationFailure(operation: StaffSyncOperationResult) {
+  if (typeof operation.retryable === "boolean") {
+    return operation.retryable;
+  }
+
+  const code = String(operation.errorCode ?? "")
+    .trim()
+    .toUpperCase();
+
+  if (!code) {
+    return true;
+  }
+
+  const permanentCodes = new Set([
+    "DUPLICATE_REGISTRATION",
+    "INVALID_OFFLINE_REGISTRATION",
+    "OFFLINE_REGISTRATION_RESOURCE_NOT_FOUND",
+    "OFFLINE_REGISTRATION_CONFLICT",
+    "LEGACY_UNSIGNED_OFFLINE_QR",
+    "VISITOR_UPDATE_CONFLICT",
+  ]);
+
+  if (permanentCodes.has(code)) {
+    return false;
+  }
+
+  return (
+    code === "OPERATION_FAILED" ||
+    code === "OFFLINE_REGISTRATION_FAILED" ||
+    code === "PREVIOUS_OPERATION_FAILED" ||
+    code === "PREVIOUS_OPERATION_NOT_COMPLETED" ||
+    code === "OFFLINE_OPERATION_RESULT_MISSING" ||
+    code === "CANONICAL_REGISTRATION_ID_MISSING" ||
+    code === "STAFF_OFFLINE_SYNC_FAILED" ||
+    code === "STAFF_SESSION_INACTIVE" ||
+    code === "OFFLINE_REGISTRATION_NOT_SYNCED" ||
+    code === "OFFLINE_QR_NOT_SYNCED" ||
+    code.startsWith("HTTP_5") ||
+    code === "HTTP_401" ||
+    code === "HTTP_403" ||
+    code === "HTTP_404" ||
+    code === "HTTP_408" ||
+    code === "HTTP_425" ||
+    code === "HTTP_429" ||
+    code.startsWith("NETWORK_") ||
+    code.startsWith("UNKNOWN_") ||
+    code.startsWith("UNEXPECTED_OFFLINE_OPERATION_STATUS_")
+  );
+}
+
 function assertOperationSucceeded(operation: StaffSyncOperationResult) {
   const status = normalizeStatus(operation.status);
 
@@ -323,7 +380,7 @@ function assertOperationSucceeded(operation: StaffSyncOperationResult) {
         `Offline operation failed with status ${status}`,
       {
         code: operation.errorCode || `OFFLINE_OPERATION_${status}`,
-        retryable: false,
+        retryable: isRetryableOperationFailure(operation),
       },
     );
   }
@@ -395,6 +452,8 @@ function getHttpErrorDetails(error: unknown) {
         data?: {
           message?: string | string[];
           error?: string;
+          code?: string;
+          errorCode?: string;
         };
       };
     }
@@ -413,6 +472,7 @@ function getHttpErrorDetails(error: unknown) {
   return {
     status: response.status,
     message,
+    code: firstString(response.data?.errorCode, response.data?.code),
   };
 }
 
@@ -424,14 +484,37 @@ function normalizeRequestError(error: unknown): StaffOfflineSyncError {
   const http = getHttpErrorDetails(error);
 
   if (http?.status) {
+    const normalizedMessage = String(http.message ?? "").toUpperCase();
+    const normalizedCode = String(http.code ?? "").toUpperCase();
+
+    const staleSession =
+      normalizedCode === "STAFF_SESSION_INACTIVE" ||
+      normalizedMessage.includes("STAFF SESSION MUST BE ACTIVE") ||
+      normalizedMessage.includes("STAFF SESSION WAS NOT FOUND");
+
+    const pendingOfflineRegistration =
+      normalizedCode === "OFFLINE_REGISTRATION_NOT_SYNCED" ||
+      normalizedCode === "OFFLINE_QR_NOT_SYNCED" ||
+      normalizedMessage.includes("OFFLINE_REGISTRATION_NOT_SYNCED") ||
+      normalizedMessage.includes("OFFLINE_QR_NOT_SYNCED");
+
     const retryable =
+      staleSession ||
+      pendingOfflineRegistration ||
+      http.status === 401 ||
+      http.status === 403 ||
+      http.status === 404 ||
       http.status === 408 ||
       http.status === 425 ||
       http.status === 429 ||
       http.status >= 500;
 
     return new StaffOfflineSyncError(http.message || `HTTP ${http.status}`, {
-      code: `HTTP_${http.status}`,
+      code: staleSession
+        ? "STAFF_SESSION_INACTIVE"
+        : pendingOfflineRegistration
+          ? "OFFLINE_REGISTRATION_NOT_SYNCED"
+          : http.code || `HTTP_${http.status}`,
       retryable,
       httpStatus: http.status,
     });

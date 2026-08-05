@@ -11,7 +11,7 @@
  * - تحديث الملفات تلقائيًا عند صدور نسخة جديدة.
  */
 
-const CACHE_VERSION = "creative-staff-scanner-v7";
+const CACHE_VERSION = "creative-staff-scanner-v8";
 
 const APP_SHELL_CACHE = `${CACHE_VERSION}-app-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
@@ -403,7 +403,7 @@ function createOfflineFallbackResponse() {
         padding: 24px;
         font-family:
           Arial,
-          Tajawal,
+          Tahoma,
           sans-serif;
         background:
           radial-gradient(

@@ -21,6 +21,7 @@ import {
   UpdateStaffVisitorResponse,
 } from "@/features/staff-visitors/staff-visitors.api";
 import { createOfflineQrImageDataUrl } from "./staff-offline-qr-image";
+import { normalizeQrToken } from "@/features/staff-scanner/utils/staff-scanner.helpers";
 
 export type CachedStaffBadgeTemplate = {
   eventId: string;
@@ -384,6 +385,203 @@ class StaffScannerDatabase extends Dexie {
           snapshot.serverRevision = normalizedCursor;
         });
       });
+
+    /*
+     * Version 11:
+     *
+     * النسخ السابقة كانت تصنف أي FAILED قادم من Sync Batch
+     * كفشل نهائي، حتى عندما يكون الخطأ مؤقتًا مثل OPERATION_FAILED
+     * أو 404 أثناء نشر endpoint جديد. نعيد فقط الحالات القابلة
+     * للاستعادة إلى FAILED/retryable دون لمس التكرارات أو التعارضات
+     * الحقيقية.
+     */
+    this.version(11)
+      .stores({
+        scans:
+          "++id, operationId, eventId, deviceId, staffSessionId, checkpointId, qrToken, registrationId, type, status, retryable, createdAt, lastAttemptAt, syncedAt",
+
+        visitorRegistrations:
+          "++id, operationId, localId, eventId, attendeeTypeId, issuerDeviceId, status, retryable, createdAt, lastAttemptAt, syncedAt",
+
+        visitorUpdates:
+          "++id, operationId, eventId, registrationId, status, retryable, createdAt, updatedAt, lastAttemptAt, syncedAt",
+      })
+      .upgrade(async (transaction) => {
+        const scansTable = transaction.table("scans") as Table<
+          QueuedStaffScan,
+          number
+        >;
+
+        const registrationsTable = transaction.table(
+          "visitorRegistrations",
+        ) as Table<QueuedStaffVisitorRegistration, number>;
+
+        const updatesTable = transaction.table("visitorUpdates") as Table<
+          QueuedStaffVisitorUpdate,
+          number
+        >;
+
+        await registrationsTable.toCollection().modify((registration) => {
+          if (
+            registration.status === "PERMANENT_FAILED" &&
+            isRecoverableOfflineFailure(registration.errorCode)
+          ) {
+            registration.status = "FAILED";
+            registration.retryable = true;
+            registration.errorCode =
+              registration.errorCode || "LEGACY_RETRYABLE_FAILURE";
+          }
+        });
+
+        await updatesTable.toCollection().modify((update) => {
+          if (
+            update.status === "PERMANENT_FAILED" &&
+            isRecoverableOfflineFailure(update.errorCode)
+          ) {
+            update.status = "FAILED";
+            update.retryable = true;
+            update.errorCode =
+              update.errorCode || "LEGACY_RETRYABLE_FAILURE";
+          }
+        });
+
+        await scansTable.toCollection().modify((scan) => {
+          if (
+            scan.status === "PERMANENT_FAILED" &&
+            isRecoverableOfflineFailure(scan.errorCode)
+          ) {
+            scan.status = "FAILED";
+            scan.retryable = true;
+            scan.errorCode = scan.errorCode || "LEGACY_RETRYABLE_FAILURE";
+          }
+        });
+      });
+
+    /*
+     * Version 12:
+     * - إعادة بناء aliases الخاصة بالـQR بعد توحيد المحارف الخفية.
+     * - إعادة حالات Session المنتهية وO2 غير المتزامن إلى قائمة المحاولة.
+     */
+    this.version(12)
+      .stores({
+        scans:
+          "++id, operationId, eventId, deviceId, staffSessionId, checkpointId, qrToken, registrationId, type, status, retryable, createdAt, lastAttemptAt, syncedAt",
+        visitors:
+          "id, eventId, snapshotId, publicId, fullName, phone, email, status, attendeeTypeId, searchText, syncStatus, *qrLookupKeys, updatedAt",
+      })
+      .upgrade(async (transaction) => {
+        const scansTable = transaction.table("scans") as Table<
+          QueuedStaffScan,
+          number
+        >;
+        const visitorsTable = transaction.table("visitors") as Table<
+          CachedStaffVisitor,
+          string
+        >;
+
+        await scansTable.toCollection().modify((scan) => {
+          const message = String(scan.errorMessage ?? "").toUpperCase();
+          const code = String(scan.errorCode ?? "").toUpperCase();
+
+          const recoverableLegacyScan =
+            code === "OFFLINE_REGISTRATION_NOT_SYNCED" ||
+            code === "OFFLINE_QR_NOT_SYNCED" ||
+            code === "STAFF_SESSION_INACTIVE" ||
+            message.includes("STAFF SESSION MUST BE ACTIVE") ||
+            message.includes("OFFLINE_REGISTRATION_NOT_SYNCED");
+
+          if (
+            recoverableLegacyScan &&
+            scan.status === "PERMANENT_FAILED"
+          ) {
+            scan.status = "FAILED";
+            scan.retryable = true;
+          }
+
+          scan.qrToken = normalizeQrToken(scan.qrToken);
+        });
+
+        await visitorsTable.toCollection().modify((visitor) => {
+          visitor.qrLookupKeys = buildVisitorQrLookupKeys(visitor);
+        });
+      });
+
+    /*
+     * Version 13:
+     * - إضافة alias مبني على tokenId حتى تعمل البادجات القديمة Offline.
+     * - لا نعتبر alias تحققًا أمنيًا؛ هو فقط للعثور على الزائر محليًا.
+     * - التوكن الخام يبقى محفوظًا داخل عملية المسح ويتحقق منه الباك عند المزامنة.
+     */
+    this.version(13)
+      .stores({
+        scans:
+          "++id, operationId, eventId, deviceId, staffSessionId, checkpointId, qrToken, registrationId, type, status, retryable, createdAt, lastAttemptAt, syncedAt",
+        visitors:
+          "id, eventId, snapshotId, publicId, fullName, phone, email, status, attendeeTypeId, searchText, syncStatus, *qrLookupKeys, updatedAt",
+        visitorRegistrations:
+          "++id, operationId, localId, eventId, attendeeTypeId, issuerDeviceId, status, retryable, createdAt, lastAttemptAt, syncedAt",
+        visitorUpdates:
+          "++id, operationId, eventId, registrationId, status, retryable, createdAt, updatedAt, lastAttemptAt, syncedAt",
+      })
+      .upgrade(async (transaction) => {
+        const scansTable = transaction.table("scans") as Table<
+          QueuedStaffScan,
+          number
+        >;
+        const visitorsTable = transaction.table("visitors") as Table<
+          CachedStaffVisitor,
+          string
+        >;
+        const registrationsTable = transaction.table(
+          "visitorRegistrations",
+        ) as Table<QueuedStaffVisitorRegistration, number>;
+        const updatesTable = transaction.table("visitorUpdates") as Table<
+          QueuedStaffVisitorUpdate,
+          number
+        >;
+
+        await scansTable.toCollection().modify((scan) => {
+          scan.qrToken = normalizeQrToken(scan.qrToken);
+
+          if (
+            scan.status === "PERMANENT_FAILED" &&
+            isRecoverableOfflineFailure(scan.errorCode, scan.errorMessage)
+          ) {
+            scan.status = "FAILED";
+            scan.retryable = true;
+            scan.lastAttemptAt = null;
+          }
+        });
+
+        await registrationsTable.toCollection().modify((registration) => {
+          if (
+            registration.status === "PERMANENT_FAILED" &&
+            isRecoverableOfflineFailure(
+              registration.errorCode,
+              registration.errorMessage,
+            )
+          ) {
+            registration.status = "FAILED";
+            registration.retryable = true;
+            registration.lastAttemptAt = null;
+          }
+        });
+
+        await updatesTable.toCollection().modify((update) => {
+          if (
+            update.status === "PERMANENT_FAILED" &&
+            isRecoverableOfflineFailure(update.errorCode, update.errorMessage)
+          ) {
+            update.status = "FAILED";
+            update.retryable = true;
+            update.lastAttemptAt = null;
+          }
+        });
+
+        await visitorsTable.toCollection().modify((visitor) => {
+          visitor.qrLookupKeys = buildVisitorQrLookupKeys(visitor);
+        });
+      });
   }
 }
 
@@ -434,6 +632,11 @@ const OFFLINE_SYNC_LOCK_NAME = "creative-staff-scanner-offline-sync";
 const FALLBACK_LOCK_KEY = "creative-staff-scanner:offline-sync-lock";
 
 const FALLBACK_LOCK_TTL_MS = 90_000;
+const FALLBACK_LOCK_HEARTBEAT_MS = 30_000;
+
+const QUEUE_RETRY_BASE_DELAY_MS = 5_000;
+const QUEUE_RETRY_MAX_DELAY_MS = 2 * 60_000;
+
 const STALE_SYNCING_TIMEOUT_MS = 5 * 60_000;
 const LOCAL_SYNCED_GRACE_PERIOD_MS = 24 * 60 * 60_000;
 
@@ -442,6 +645,118 @@ const RETRYABLE_HTTP_STATUSES = new Set([401, 403, 408, 425, 429]);
 const PERMANENT_QUEUE_STATUSES: QueuedScanStatus[] = ["PERMANENT_FAILED"];
 
 const RETRYABLE_QUEUE_STATUSES: QueuedScanStatus[] = ["PENDING", "FAILED"];
+
+const OFFLINE_QUEUE_CHANGED_EVENT = "creative:offline-queue-changed";
+
+function notifyOfflineQueueChanged() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent(OFFLINE_QUEUE_CHANGED_EVENT));
+}
+
+const NON_RECOVERABLE_OFFLINE_FAILURE_CODES = new Set([
+  "DUPLICATE_REGISTRATION",
+  "INVALID_OFFLINE_REGISTRATION",
+  "OFFLINE_REGISTRATION_RESOURCE_NOT_FOUND",
+  "OFFLINE_REGISTRATION_CONFLICT",
+  "LEGACY_UNSIGNED_OFFLINE_QR",
+  "VISITOR_UPDATE_CONFLICT",
+]);
+
+function isRecoverableOfflineFailure(
+  errorCode: unknown,
+  errorMessage?: unknown,
+) {
+  const code = String(errorCode ?? "")
+    .trim()
+    .toUpperCase();
+  const message = String(errorMessage ?? "")
+    .trim()
+    .toUpperCase();
+
+  if (code && NON_RECOVERABLE_OFFLINE_FAILURE_CODES.has(code)) {
+    return false;
+  }
+
+  const recoverableMessage =
+    message.includes("STAFF SESSION MUST BE ACTIVE") ||
+    message.includes("STAFF SESSION WAS NOT FOUND") ||
+    message.includes("STAFF_SESSION_INACTIVE") ||
+    message.includes("OFFLINE_REGISTRATION_NOT_SYNCED") ||
+    message.includes("OFFLINE_QR_NOT_SYNCED") ||
+    message.includes("PREVIOUS OPERATION FAILED") ||
+    message.includes("PREVIOUS OPERATION HAS NOT COMPLETED") ||
+    message.includes("NETWORK ERROR") ||
+    message.includes("FAILED TO FETCH") ||
+    message.includes("LOAD FAILED") ||
+    message.includes("TIMEOUT") ||
+    message.includes("ECONN") ||
+    message.includes("ETIMEDOUT");
+
+  if (!code) {
+    return recoverableMessage || !message;
+  }
+
+  return (
+    recoverableMessage ||
+    code === "OPERATION_FAILED" ||
+    code === "OFFLINE_REGISTRATION_FAILED" ||
+    code === "OFFLINE_REGISTRATION_RETRYABLE_FAILURE" ||
+    code === "PREVIOUS_OPERATION_FAILED" ||
+    code === "PREVIOUS_OPERATION_NOT_COMPLETED" ||
+    code === "OFFLINE_OPERATION_RESULT_MISSING" ||
+    code === "CANONICAL_REGISTRATION_ID_MISSING" ||
+    code === "STAFF_OFFLINE_SYNC_FAILED" ||
+    code === "NETWORK_OR_UNKNOWN_ERROR" ||
+    code === "UNKNOWN_SYNC_ERROR" ||
+    code === "UNKNOWN_OFFLINE_SYNC_ERROR" ||
+    code === "STALE_SYNC_RECOVERED" ||
+    code === "PARENT_OFFLINE_REGISTRATION_FAILED" ||
+    code === "STAFF_SESSION_INACTIVE" ||
+    code === "OFFLINE_REGISTRATION_NOT_SYNCED" ||
+    code === "OFFLINE_QR_NOT_SYNCED" ||
+    code === "HTTP_401" ||
+    code === "HTTP_403" ||
+    code === "HTTP_404" ||
+    code === "HTTP_408" ||
+    code === "HTTP_425" ||
+    code === "HTTP_429" ||
+    code.startsWith("HTTP_5") ||
+    code.startsWith("NETWORK_") ||
+    code.startsWith("UNKNOWN_") ||
+    code.startsWith("UNEXPECTED_OFFLINE_OPERATION_STATUS_")
+  );
+}
+
+function getQueueRetryDelay(attemptCount: unknown) {
+  const attempts = Math.max(0, Number(attemptCount) || 0);
+  const exponent = Math.min(6, Math.max(0, attempts - 1));
+
+  return Math.min(
+    QUEUE_RETRY_MAX_DELAY_MS,
+    QUEUE_RETRY_BASE_DELAY_MS * 2 ** exponent,
+  );
+}
+
+function isQueueRetryDue(item: {
+  status: QueuedScanStatus;
+  attemptCount?: number | null;
+  lastAttemptAt?: string | null;
+}) {
+  if (item.status === "PENDING") {
+    return true;
+  }
+
+  const lastAttemptAt = parseDateMs(item.lastAttemptAt);
+
+  if (!lastAttemptAt) {
+    return true;
+  }
+
+  return Date.now() - lastAttemptAt >= getQueueRetryDelay(item.attemptCount);
+}
 
 function createRandomId(prefix: string) {
   if (
@@ -557,6 +872,98 @@ function normalizeCachedVisitor(
   return normalized;
 }
 
+function mergeCachedVisitorQrState(
+  incoming: CachedStaffVisitor,
+  existing?: CachedStaffVisitor | null,
+): CachedStaffVisitor {
+  if (!existing) {
+    incoming.qrLookupKeys = buildVisitorQrLookupKeys(incoming);
+    return incoming;
+  }
+
+  const canonicalQrToken =
+    incoming.canonicalQrToken ||
+    incoming.qr?.canonicalQrToken ||
+    incoming.qr?.compactQrToken ||
+    existing.canonicalQrToken ||
+    existing.qr?.canonicalQrToken ||
+    existing.qr?.compactQrToken ||
+    null;
+
+  const offlineQrToken =
+    incoming.offlineQrToken ||
+    incoming.qr?.offlineQrToken ||
+    existing.offlineQrToken ||
+    existing.qr?.offlineQrToken ||
+    null;
+
+  const offlineSignedQr =
+    incoming.offlineSignedQr ||
+    incoming.qr?.offlineSignedQr ||
+    existing.offlineSignedQr ||
+    existing.qr?.offlineSignedQr ||
+    existing.qr?.signedToken ||
+    null;
+
+  const merged: CachedStaffVisitor = {
+    ...incoming,
+
+    offlineLocalId: incoming.offlineLocalId ?? existing.offlineLocalId ?? null,
+    offlineOperationId:
+      incoming.offlineOperationId ?? existing.offlineOperationId ?? null,
+
+    offlineQrToken,
+    offlineSignedQr,
+    canonicalQrToken,
+
+    qrToken:
+      canonicalQrToken ||
+      incoming.qrToken ||
+      existing.qrToken ||
+      offlineQrToken ||
+      null,
+
+    qrImageUrl:
+      incoming.qrImageUrl || existing.qrImageUrl || null,
+
+    qr: {
+      ...(existing.qr ?? {}),
+      ...(incoming.qr ?? {}),
+
+      ...(canonicalQrToken
+        ? {
+            qrToken: canonicalQrToken,
+            token: canonicalQrToken,
+            compactQrToken: canonicalQrToken,
+            canonicalQrToken,
+          }
+        : {}),
+
+      ...(offlineQrToken ? { offlineQrToken } : {}),
+      ...(offlineSignedQr
+        ? {
+            offlineSignedQr,
+            signedToken:
+              incoming.qr?.signedToken ||
+              existing.qr?.signedToken ||
+              offlineSignedQr,
+          }
+        : {}),
+    },
+  };
+
+  merged.searchText = buildVisitorSearchText(merged);
+  merged.qrLookupKeys = [
+    ...new Set([
+      ...(existing.qrLookupKeys ?? []).map(normalizeQrToken).filter(Boolean),
+      ...buildVisitorQrLookupKeys(existing),
+      ...buildVisitorQrLookupKeys(merged),
+    ]),
+  ];
+
+  return merged;
+}
+
 function firstString(...values: unknown[]) {
   return values.find((value): value is string => {
     return typeof value === "string" && value.trim().length > 0;
@@ -571,6 +978,80 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+const QR_TOKEN_ID_LOOKUP_PREFIX = "qr-token-id:";
+
+function normalizeQrTokenId(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getQrTokenIdLookupKey(value: unknown) {
+  const tokenId = normalizeQrTokenId(value);
+
+  return tokenId ? `${QR_TOKEN_ID_LOOKUP_PREFIX}${tokenId}` : "";
+}
+
+function decodeBase64UrlUtf8(value: string) {
+  if (typeof globalThis.atob !== "function") {
+    return "";
+  }
+
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(
+    Math.ceil(normalized.length / 4) * 4,
+    "=",
+  );
+  const binary = globalThis.atob(padded);
+  const bytes = Uint8Array.from(binary, (character) =>
+    character.charCodeAt(0),
+  );
+
+  if (typeof globalThis.TextDecoder === "function") {
+    return new globalThis.TextDecoder().decode(bytes);
+  }
+
+  return Array.from(bytes)
+    .map((byte) => String.fromCharCode(byte))
+    .join("");
+}
+
+/**
+ * يستخرج tokenId دون التحقق من التوقيع.
+ *
+ * الاستخدام هنا محلي فقط للعثور على الزائر داخل Snapshot.
+ * القرار الأمني النهائي يبقى في الباك الذي يتحقق من التوقيع والتوكن الخام.
+ */
+function extractQrTokenId(value: unknown) {
+  const token = normalizeQrToken(value);
+
+  if (!token) {
+    return "";
+  }
+
+  const parts = token.split(".");
+
+  if (parts.length === 3 && parts[0] === "Q2") {
+    return normalizeQrTokenId(parts[1]);
+  }
+
+  if (parts.length !== 2) {
+    return "";
+  }
+
+  try {
+    const decoded = decodeBase64UrlUtf8(parts[0]);
+
+    if (!decoded) {
+      return "";
+    }
+
+    const payload = asRecord(JSON.parse(decoded));
+
+    return normalizeQrTokenId(payload?.tokenId);
+  } catch {
+    return "";
+  }
+}
+
 function readAllQrTokens(value: unknown): string[] {
   const tokens = new Set<string>();
 
@@ -579,7 +1060,7 @@ function readAllQrTokens(value: unknown): string[] {
       return;
     }
 
-    const token = candidate.trim();
+    const token = normalizeQrToken(candidate);
 
     if (token) {
       tokens.add(token);
@@ -604,6 +1085,8 @@ function readAllQrTokens(value: unknown): string[] {
     add(record.token);
     add(record.signedToken);
     add(record.value);
+    add(record.offlineQrToken);
+    add(record.offlineSignedQr);
 
     if (record.qr && record.qr !== candidate) {
       visit(record.qr);
@@ -615,6 +1098,49 @@ function readAllQrTokens(value: unknown): string[] {
   return [...tokens];
 }
 
+function readAllQrTokenIds(value: unknown): string[] {
+  const tokenIds = new Set<string>();
+
+  function add(candidate: unknown) {
+    const tokenId = normalizeQrTokenId(candidate);
+
+    if (tokenId) {
+      tokenIds.add(tokenId);
+    }
+  }
+
+  function visit(candidate: unknown) {
+    if (typeof candidate === "string") {
+      add(extractQrTokenId(candidate));
+      return;
+    }
+
+    const record = asRecord(candidate);
+
+    if (!record) {
+      return;
+    }
+
+    add(record.tokenId);
+    add(extractQrTokenId(record.qrToken));
+    add(extractQrTokenId(record.canonicalQrToken));
+    add(extractQrTokenId(record.compactQrToken));
+    add(extractQrTokenId(record.token));
+    add(extractQrTokenId(record.signedToken));
+    add(extractQrTokenId(record.value));
+    add(extractQrTokenId(record.offlineQrToken));
+    add(extractQrTokenId(record.offlineSignedQr));
+
+    if (record.qr && record.qr !== candidate) {
+      visit(record.qr);
+    }
+  }
+
+  visit(value);
+
+  return [...tokenIds];
+}
+
 function buildVisitorQrLookupKeys(
   visitor: StaffVisitor & {
     offlineQrToken?: string | null;
@@ -622,29 +1148,43 @@ function buildVisitorQrLookupKeys(
     canonicalQrToken?: string | null;
   },
 ) {
+  const tokens = [
+    ...readAllQrTokens(visitor.qrToken),
+    ...readAllQrTokens(visitor.qr),
+
+    /*
+     * الرمز القصير المطبوع.
+     */
+    ...readAllQrTokens(visitor.offlineQrToken),
+
+    /*
+     * الرمز الكامل القديم.
+     */
+    ...readAllQrTokens(visitor.offlineSignedQr),
+
+    ...readAllQrTokens(visitor.canonicalQrToken),
+  ];
+
+  const tokenIds = [
+    ...readAllQrTokenIds(visitor.qrToken),
+    ...readAllQrTokenIds(visitor.qr),
+    ...readAllQrTokenIds(visitor.offlineQrToken),
+    ...readAllQrTokenIds(visitor.offlineSignedQr),
+    ...readAllQrTokenIds(visitor.canonicalQrToken),
+    ...tokens.map(extractQrTokenId),
+  ];
+
   return [
     ...new Set([
-      ...readAllQrTokens(visitor.qrToken),
-      ...readAllQrTokens(visitor.qr),
-
-      /*
-       * الرمز القصير المطبوع.
-       */
-      ...readAllQrTokens(visitor.offlineQrToken),
-
-      /*
-       * الرمز الكامل القديم.
-       */
-      ...readAllQrTokens(visitor.offlineSignedQr),
-
-      ...readAllQrTokens(visitor.canonicalQrToken),
+      ...tokens.map(normalizeQrToken).filter(Boolean),
+      ...tokenIds.map(getQrTokenIdLookupKey).filter(Boolean),
     ]),
   ];
 }
 
 function readQrToken(value: unknown): string {
   if (typeof value === "string") {
-    return value.trim();
+    return normalizeQrToken(value);
   }
 
   const record = asRecord(value);
@@ -653,15 +1193,23 @@ function readQrToken(value: unknown): string {
     return "";
   }
 
+  const candidates = [
+    record.canonicalQrToken,
+    record.compactQrToken,
+    record.qrToken,
+    record.token,
+    record.value,
+    record.offlineQrToken,
+    record.signedToken,
+  ]
+    .map(normalizeQrToken)
+    .filter(Boolean);
+
   return (
-    firstString(
-      record.qrToken,
-      record.canonicalQrToken,
-      record.compactQrToken,
-      record.token,
-      record.value,
-      record.signedToken,
-    ) ?? ""
+    candidates.find((token) => token.startsWith("Q2.")) ||
+    candidates.find((token) => token.startsWith("O2.")) ||
+    candidates[0] ||
+    ""
   );
 }
 
@@ -733,7 +1281,9 @@ function classifyQueueError(error: unknown): QueueErrorDetails {
     return {
       message: error.message || "Offline synchronization failed",
       code: error.code,
-      retryable: error.retryable,
+      retryable:
+        error.retryable ||
+        isRecoverableOfflineFailure(error.code, error.message),
       httpStatus: error.httpStatus,
     };
   }
@@ -741,12 +1291,32 @@ function classifyQueueError(error: unknown): QueueErrorDetails {
   const http = getHttpErrorDetails(error);
 
   if (http?.status) {
+    const normalizedMessage = String(http.message ?? "").toUpperCase();
+    const normalizedCode = String(http.code ?? "").toUpperCase();
+
+    const staleSession =
+      normalizedCode === "STAFF_SESSION_INACTIVE" ||
+      normalizedMessage.includes("STAFF SESSION MUST BE ACTIVE") ||
+      normalizedMessage.includes("STAFF SESSION WAS NOT FOUND");
+
+    const pendingOfflineRegistration =
+      normalizedCode === "OFFLINE_REGISTRATION_NOT_SYNCED" ||
+      normalizedCode === "OFFLINE_QR_NOT_SYNCED" ||
+      normalizedMessage.includes("OFFLINE_REGISTRATION_NOT_SYNCED");
+
     const retryable =
-      RETRYABLE_HTTP_STATUSES.has(http.status) || http.status >= 500;
+      staleSession ||
+      pendingOfflineRegistration ||
+      RETRYABLE_HTTP_STATUSES.has(http.status) ||
+      http.status >= 500;
 
     return {
       message: http.message || `HTTP ${http.status}`,
-      code: http.code,
+      code: staleSession
+        ? "STAFF_SESSION_INACTIVE"
+        : pendingOfflineRegistration
+          ? "OFFLINE_REGISTRATION_NOT_SYNCED"
+          : http.code,
       retryable,
       httpStatus: http.status,
     };
@@ -1143,6 +1713,30 @@ function acquireFallbackLock(owner: string) {
   }
 }
 
+function renewFallbackLock(owner: string) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+
+  try {
+    const current = readFallbackLock();
+
+    if (current?.owner !== owner) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      FALLBACK_LOCK_KEY,
+      JSON.stringify({
+        owner,
+        expiresAt: Date.now() + FALLBACK_LOCK_TTL_MS,
+      }),
+    );
+  } catch {
+    // Best effort. operationId يبقى طبقة idempotency إضافية.
+  }
+}
+
 export type DownloadStaffVisitorsSnapshotResult = {
   eventId: string;
 
@@ -1204,9 +1798,20 @@ async function runWithOfflineSyncLock<T>(
     return null;
   }
 
+  const heartbeatId =
+    typeof window === "undefined"
+      ? null
+      : window.setInterval(() => {
+          renewFallbackLock(owner);
+        }, FALLBACK_LOCK_HEARTBEAT_MS);
+
   try {
     return await task();
   } finally {
+    if (heartbeatId !== null) {
+      window.clearInterval(heartbeatId);
+    }
+
     releaseFallbackLock(owner);
   }
 }
@@ -1316,9 +1921,10 @@ export async function addScanToQueue(
     return existing.id;
   }
 
-  return staffScannerDb.scans.add({
+  const id = await staffScannerDb.scans.add({
     ...scan,
 
+    qrToken: normalizeQrToken(scan.qrToken),
     status: "PENDING",
 
     retryable: true,
@@ -1332,6 +1938,10 @@ export async function addScanToQueue(
     errorCode: null,
     errorMessage: null,
   });
+
+  notifyOfflineQueueChanged();
+
+  return id;
 }
 
 export async function getPendingScansCount() {
@@ -1389,6 +1999,10 @@ export async function getPendingQueuedScans() {
   ]);
 
   const filteredScans = scans.filter((scan) => {
+    if (!isQueueRetryDue(scan)) {
+      return false;
+    }
+
     return !unresolvedRegistrations.some((registration) =>
       scanDependsOnRegistration(scan, registration),
     );
@@ -1441,6 +2055,9 @@ export async function clearSyncedScans() {
 
 export async function syncQueuedScans(options: {
   submitScan: (payload: CreateScanPayload) => Promise<unknown>;
+  preparePayload?: (
+    payload: CreateScanPayload,
+  ) => CreateScanPayload | Promise<CreateScanPayload>;
 }) {
   const executed = await runWithOfflineSyncLock(
     async (): Promise<SyncQueuedScansResult> => {
@@ -1476,7 +2093,12 @@ export async function syncQueuedScans(options: {
         });
 
         try {
-          await options.submitScan(toCreateScanPayload(scan));
+          const originalPayload = toCreateScanPayload(scan);
+          const preparedPayload = options.preparePayload
+            ? await options.preparePayload(originalPayload)
+            : originalPayload;
+
+          await options.submitScan(preparedPayload);
 
           await markScanAsSynced(scan.id);
 
@@ -1913,8 +2535,18 @@ export async function downloadStaffVisitorsSnapshot(options: {
       if (typeof response.snapshot.totalCount === "number") {
         totalCount = response.snapshot.totalCount;
       }
-      const normalizedVisitors = response.visitors.map((visitor) =>
-        normalizeCachedVisitor(eventId, visitor, "CACHED", snapshotId),
+      const normalizedVisitorsWithoutAliases = response.visitors.map(
+        (visitor) =>
+          normalizeCachedVisitor(eventId, visitor, "CACHED", snapshotId),
+      );
+
+      const existingVisitors = await staffScannerDb.visitors.bulkGet(
+        normalizedVisitorsWithoutAliases.map((visitor) => visitor.id),
+      );
+
+      const normalizedVisitors = normalizedVisitorsWithoutAliases.map(
+        (visitor, index) =>
+          mergeCachedVisitorQrState(visitor, existingVisitors[index]),
       );
 
       const pageItems = normalizedVisitors.length;
@@ -2169,11 +2801,14 @@ export async function applyStaffVisitorChanges(
           continue;
         }
 
-        const normalized = normalizeCachedVisitor(
-          eventId,
-          change.visitor,
-          "CACHED",
-          snapshot.snapshotId,
+        const normalized = mergeCachedVisitorQrState(
+          normalizeCachedVisitor(
+            eventId,
+            change.visitor,
+            "CACHED",
+            snapshot.snapshotId,
+          ),
+          existing,
         );
 
         await staffScannerDb.visitors.put(normalized);
@@ -2296,15 +2931,27 @@ export async function replaceCachedStaffVisitorsForEvent(
     return;
   }
 
-  const currentLocalVisitors = await staffScannerDb.visitors
+  const currentVisitors = await staffScannerDb.visitors
     .where("eventId")
     .equals(eventId)
-    .and((visitor) => visitor.syncStatus !== "CACHED")
     .toArray();
 
-  const cachedVisitors = visitors.map((visitor) =>
-    normalizeCachedVisitor(eventId, visitor, "CACHED"),
+  const currentVisitorsById = new Map(
+    currentVisitors.map((visitor) => [visitor.id, visitor]),
   );
+
+  const currentLocalVisitors = currentVisitors.filter(
+    (visitor) => visitor.syncStatus !== "CACHED",
+  );
+
+  const cachedVisitors = visitors.map((visitor) => {
+    const normalized = normalizeCachedVisitor(eventId, visitor, "CACHED");
+
+    return mergeCachedVisitorQrState(
+      normalized,
+      currentVisitorsById.get(normalized.id),
+    );
+  });
 
   const mergedVisitors = new Map<string, CachedStaffVisitor>();
 
@@ -2470,23 +3117,32 @@ export async function findCachedStaffVisitorByQr(
   eventId: string,
   qrToken: string,
 ) {
-  const token = qrToken.trim();
+  const token = normalizeQrToken(qrToken);
 
   if (!eventId || !token) {
     return null;
   }
 
+  const tokenIdLookupKey = getQrTokenIdLookupKey(extractQrTokenId(token));
+  const lookupKeys = [...new Set([token, tokenIdLookupKey].filter(Boolean))];
+
   /*
    * البحث السريع باستخدام MultiEntry Index.
+   *
+   * نجرب التوكن الخام أولًا، ثم alias الخاص بـtokenId.
+   * alias يسمح بقراءة بادج قديم عندما يحتوي Snapshot على Q2 جديد
+   * للتسجيل نفسه، أو العكس.
    */
-  const indexedVisitor = await staffScannerDb.visitors
-    .where("qrLookupKeys")
-    .equals(token)
-    .and((visitor) => visitor.eventId === eventId)
-    .first();
+  for (const lookupKey of lookupKeys) {
+    const indexedVisitor = await staffScannerDb.visitors
+      .where("qrLookupKeys")
+      .equals(lookupKey)
+      .and((visitor) => visitor.eventId === eventId)
+      .first();
 
-  if (indexedVisitor) {
-    return indexedVisitor;
+    if (indexedVisitor) {
+      return indexedVisitor;
+    }
   }
 
   /*
@@ -2502,7 +3158,7 @@ export async function findCachedStaffVisitorByQr(
     eventVisitors.find((item) => {
       const keys = buildVisitorQrLookupKeys(item);
 
-      return keys.includes(token);
+      return lookupKeys.some((lookupKey) => keys.includes(lookupKey));
     }) ?? null;
 
   if (visitor) {
@@ -2529,7 +3185,7 @@ export async function saveCachedStaffVisitorQr(options: {
 }) {
   const eventId = options.eventId.trim();
   const registrationId = options.registrationId.trim();
-  const qrToken = options.qrToken.trim();
+  const qrToken = normalizeQrToken(options.qrToken);
 
   if (!eventId || !registrationId || !qrToken) {
     return null;
@@ -2817,6 +3473,8 @@ export async function queueStaffVisitorUpdate(options: {
     },
   );
 
+  notifyOfflineQueueChanged();
+
   return {
     visitor: updatedVisitor,
     queued: queuedUpdate!,
@@ -2861,7 +3519,9 @@ export async function syncQueuedStaffVisitorUpdates(options: {
     const queuedUpdates = await staffScannerDb.visitorUpdates
       .where("status")
       .anyOf(["PENDING", "FAILED"])
-      .filter((item) => item.retryable !== false)
+      .filter(
+        (item) => item.retryable !== false && isQueueRetryDue(item),
+      )
       .sortBy("createdAt");
 
     const result = {
@@ -3216,6 +3876,8 @@ export async function addOfflineVisitorRegistration(options: {
     },
   );
 
+  notifyOfflineQueueChanged();
+
   return {
     queued,
     visitor: localVisitor,
@@ -3273,13 +3935,144 @@ export async function getPermanentFailedOfflineWorkCount() {
   return scansCount + registrationsCount + updatesCount;
 }
 
+export type RecoverOfflineFailuresResult = {
+  registrations: number;
+  updates: number;
+  scans: number;
+  total: number;
+};
+
+/**
+ * يعيد الحالات التي صُنفت خطأ كفشل نهائي إلى قائمة المحاولة.
+ *
+ * لا يحذف أي سجل ولا يغير operationId أو QR. التكرارات الحقيقية،
+ * تعارض التوقيع، وبيانات التسجيل غير الصالحة تبقى ضمن "تحتاج مراجعة".
+ */
+export async function recoverRetryableOfflineFailures(): Promise<RecoverOfflineFailuresResult> {
+  await resetStaleSyncingOperations();
+
+  const [registrations, updates, scans] = await Promise.all([
+    staffScannerDb.visitorRegistrations
+      .where("status")
+      .equals("PERMANENT_FAILED")
+      .toArray(),
+
+    staffScannerDb.visitorUpdates
+      .where("status")
+      .equals("PERMANENT_FAILED")
+      .toArray(),
+
+    staffScannerDb.scans
+      .where("status")
+      .equals("PERMANENT_FAILED")
+      .toArray(),
+  ]);
+
+  const recoverableRegistrations = registrations.filter((registration) =>
+    isRecoverableOfflineFailure(
+      registration.errorCode,
+      registration.errorMessage,
+    ),
+  );
+
+  const recoverableUpdates = updates.filter((update) =>
+    isRecoverableOfflineFailure(update.errorCode, update.errorMessage),
+  );
+
+  const recoverableScans = scans.filter((scan) => {
+    if (isRecoverableOfflineFailure(scan.errorCode, scan.errorMessage)) {
+      return true;
+    }
+
+    return recoverableRegistrations.some((registration) =>
+      scanDependsOnRegistration(scan, registration),
+    );
+  });
+
+  const now = new Date().toISOString();
+
+  await staffScannerDb.transaction(
+    "rw",
+    staffScannerDb.visitorRegistrations,
+    staffScannerDb.visitorUpdates,
+    staffScannerDb.scans,
+    staffScannerDb.visitors,
+    async () => {
+      if (recoverableRegistrations.length > 0) {
+        await staffScannerDb.visitorRegistrations.bulkPut(
+          recoverableRegistrations.map((registration) => ({
+            ...registration,
+            status: "FAILED" as QueuedScanStatus,
+            retryable: true,
+            lastAttemptAt: null,
+            syncedAt: null,
+            errorMessage: registration.errorMessage,
+          })),
+        );
+
+        for (const registration of recoverableRegistrations) {
+          await staffScannerDb.visitors.update(registration.localId, {
+            status: "PENDING_OFFLINE",
+            syncStatus: "LOCAL_PENDING",
+            updatedAt: now,
+          });
+        }
+      }
+
+      if (recoverableUpdates.length > 0) {
+        await staffScannerDb.visitorUpdates.bulkPut(
+          recoverableUpdates.map((update) => ({
+            ...update,
+            status: "FAILED" as QueuedScanStatus,
+            retryable: true,
+            lastAttemptAt: null,
+            syncedAt: null,
+            updatedAt: now,
+          })),
+        );
+      }
+
+      if (recoverableScans.length > 0) {
+        await staffScannerDb.scans.bulkPut(
+          recoverableScans.map((scan) => ({
+            ...scan,
+            status: "FAILED" as QueuedScanStatus,
+            retryable: true,
+            lastAttemptAt: null,
+            syncedAt: null,
+          })),
+        );
+      }
+    },
+  );
+
+  const total =
+    recoverableRegistrations.length +
+    recoverableUpdates.length +
+    recoverableScans.length;
+
+  if (total > 0) {
+    notifyOfflineQueueChanged();
+  }
+
+  return {
+    registrations: recoverableRegistrations.length,
+    updates: recoverableUpdates.length,
+    scans: recoverableScans.length,
+    total,
+  };
+}
+
 export async function getPendingQueuedVisitorRegistrations() {
   await resetStaleSyncingRegistrations();
 
   const registrations = await staffScannerDb.visitorRegistrations
     .where("status")
     .anyOf(RETRYABLE_QUEUE_STATUSES)
-    .filter((registration) => registration.retryable !== false)
+    .filter(
+      (registration) =>
+        registration.retryable !== false && isQueueRetryDue(registration),
+    )
     .toArray();
 
   return registrations.sort((left, right) => {

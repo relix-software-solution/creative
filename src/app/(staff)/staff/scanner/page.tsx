@@ -23,6 +23,7 @@ import {
   useMyStaffAssignment,
   useStartMyStaffSession,
 } from "@/features/staff/staff.queries";
+import { startMyStaffSession } from "@/features/staff/staff.api";
 import { StaffSession } from "@/features/staff/staff.types";
 import {
   generateStaffVisitorQr,
@@ -70,6 +71,7 @@ import {
   getVisitorQrToken,
   isAllowedResult,
   getPublicEventInfo,
+  normalizeQrToken,
 } from "@/features/staff-scanner/utils/staff-scanner.helpers";
 import {
   ScannerControls,
@@ -88,6 +90,7 @@ import {
   getCachedStaffVisitorsCount,
   getPendingOfflineWorkCount,
   getPermanentFailedOfflineWorkCount,
+  recoverRetryableOfflineFailures,
   searchCachedStaffVisitors,
   downloadStaffVisitorsSnapshot,
   getCachedStaffVisitorsSnapshot,
@@ -145,7 +148,11 @@ export default function StaffScannerPage() {
   const controlsRef = useRef<ScannerControls | null>(null);
   const visitorResultRef = useRef<HTMLElement | null>(null);
   const startedSessionRef = useRef(false);
+  const sessionRefreshPromiseRef = useRef<Promise<StaffSession> | null>(null);
   const isProcessingScanRef = useRef(false);
+  const scanProcessingWatchdogRef = useRef<number | null>(null);
+  const resumeCameraAfterBadgeRef = useRef(false);
+  const recoveredOfflineEventRef = useRef("");
   const [isSubmittingVisitorRegistration, setIsSubmittingVisitorRegistration] =
     useState(false);
 
@@ -195,6 +202,7 @@ export default function StaffScannerPage() {
 
   const [pendingCount, setPendingCount] = useState(0);
   const [permanentFailedCount, setPermanentFailedCount] = useState(0);
+  const [isRecoveringFailures, setIsRecoveringFailures] = useState(false);
   const [lastOfflineSaved, setLastOfflineSaved] = useState(false);
 
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -386,6 +394,146 @@ export default function StaffScannerPage() {
     activeContext.staffSessionId,
   );
 
+  function applyActiveStaffSession(session: StaffSession) {
+    setStaffSession(session);
+
+    const nextContext = {
+      assignmentId:
+        assignment?.id || assignmentId || cachedContext?.assignmentId || null,
+      eventId: session.eventId || assignment?.eventId || activeContext.eventId,
+      eventTitle: assignment
+        ? getEventTitle(assignment)
+        : cachedContext?.eventTitle || activeContext.eventTitle,
+      checkpointId:
+        session.checkpointId ||
+        assignment?.checkpointId ||
+        activeContext.checkpointId,
+      checkpointName: assignment
+        ? getCheckpointName(assignment)
+        : cachedContext?.checkpointName || activeContext.checkpointName,
+      checkpointType:
+        assignment?.checkpoint?.type ??
+        cachedContext?.checkpointType ??
+        checkpointType ??
+        null,
+      deviceId:
+        session.deviceId || assignment?.deviceId || activeContext.deviceId,
+      deviceName: assignment?.device?.name ?? cachedContext?.deviceName ?? null,
+      deviceCode: assignment?.device?.code ?? cachedContext?.deviceCode ?? null,
+      deviceApiKey:
+        getDeviceApiKey(assignment) ||
+        activeDeviceApiKey ||
+        cachedContext?.deviceApiKey ||
+        null,
+      staffSessionId: session.id,
+      savedAt: new Date().toISOString(),
+    };
+
+    setScannerContext({
+      assignmentId: nextContext.assignmentId,
+      eventId: nextContext.eventId,
+      eventTitle: nextContext.eventTitle,
+      checkpointId: nextContext.checkpointId,
+      checkpointName: nextContext.checkpointName,
+      checkpointType: nextContext.checkpointType,
+      deviceId: nextContext.deviceId,
+      deviceName: nextContext.deviceName,
+      deviceCode: nextContext.deviceCode,
+      deviceApiKey: nextContext.deviceApiKey,
+      staffSessionId: nextContext.staffSessionId,
+    });
+
+    saveStaffScannerContext(nextContext);
+    setCachedContext(nextContext);
+
+    return nextContext;
+  }
+
+  async function ensureActiveScannerSession(options?: { force?: boolean }) {
+    const onlineNow =
+      typeof navigator === "undefined" ? isOnline : navigator.onLine;
+
+    if (!onlineNow) {
+      throw new Error("SCANNER_SESSION_RENEWAL_REQUIRES_NETWORK");
+    }
+
+    if (
+      options?.force !== true &&
+      staffSession?.id &&
+      String(staffSession.status ?? "ACTIVE").toUpperCase() === "ACTIVE" &&
+      !staffSession.endedAt
+    ) {
+      return {
+        ...activeContext,
+        staffSessionId: staffSession.id,
+      };
+    }
+
+    if (sessionRefreshPromiseRef.current) {
+      const session = await sessionRefreshPromiseRef.current;
+      return applyActiveStaffSession(session);
+    }
+
+    const request = startMyStaffSession();
+    sessionRefreshPromiseRef.current = request;
+
+    try {
+      const session = await request;
+      return applyActiveStaffSession(session);
+    } finally {
+      sessionRefreshPromiseRef.current = null;
+    }
+  }
+
+  function releaseScanProcessingLock() {
+    isProcessingScanRef.current = false;
+
+    if (scanProcessingWatchdogRef.current !== null) {
+      window.clearTimeout(scanProcessingWatchdogRef.current);
+      scanProcessingWatchdogRef.current = null;
+    }
+  }
+
+  function acquireScanProcessingLock() {
+    if (isProcessingScanRef.current) {
+      return false;
+    }
+
+    isProcessingScanRef.current = true;
+
+    if (scanProcessingWatchdogRef.current !== null) {
+      window.clearTimeout(scanProcessingWatchdogRef.current);
+    }
+
+    /* لا تبقى الكاميرا أو قارئ USB مقفولين بسبب Exception غير متوقع. */
+    scanProcessingWatchdogRef.current = window.setTimeout(() => {
+      releaseScanProcessingLock();
+    }, 15_000);
+
+    return true;
+  }
+
+  function restoreScannerInputAfterPrint() {
+    releaseScanProcessingLock();
+    hardwareScannerBufferRef.current = "";
+    hardwareScannerLastKeyAtRef.current = 0;
+    setHardwareScannerReading(false);
+
+    if (hardwareScannerTimerRef.current !== null) {
+      window.clearTimeout(hardwareScannerTimerRef.current);
+      hardwareScannerTimerRef.current = null;
+    }
+
+    window.setTimeout(() => {
+      window.focus();
+
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement) {
+        activeElement.blur();
+      }
+    }, 0);
+  }
+
   const isSubmittingScan = createScanMutation.isPending;
   const isRegistering = isSubmittingVisitorRegistration;
 
@@ -457,6 +605,75 @@ export default function StaffScannerPage() {
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isReady) {
+      return;
+    }
+
+    let syncTimer: number | null = null;
+
+    function scheduleQueueSync(delay = 300) {
+      if (syncTimer !== null) {
+        window.clearTimeout(syncTimer);
+      }
+
+      syncTimer = window.setTimeout(() => {
+        if (!navigator.onLine) return;
+
+        void syncOfflineQueue({
+          silent: true,
+          force: true,
+        });
+      }, delay);
+    }
+
+    function handleQueueChanged() {
+      scheduleQueueSync(250);
+    }
+
+    function handleNetworkRestored() {
+      setIsOnline(true);
+      scheduleQueueSync(150);
+    }
+
+    window.addEventListener(
+      "creative:offline-queue-changed",
+      handleQueueChanged,
+    );
+    window.addEventListener("online", handleNetworkRestored);
+
+    const intervalId = window.setInterval(() => {
+      if (pendingCount > 0 && navigator.onLine) {
+        scheduleQueueSync(0);
+      }
+    }, 10_000);
+
+    if (pendingCount > 0 && navigator.onLine) {
+      scheduleQueueSync(500);
+    }
+
+    return () => {
+      if (syncTimer !== null) {
+        window.clearTimeout(syncTimer);
+      }
+
+      window.clearInterval(intervalId);
+      window.removeEventListener(
+        "creative:offline-queue-changed",
+        handleQueueChanged,
+      );
+      window.removeEventListener("online", handleNetworkRestored);
+    };
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isReady,
+    pendingCount,
+    activeContext.eventId,
+    activeContext.deviceId,
+    activeContext.staffSessionId,
+  ]);
 
   useEffect(() => {
     if (!hardwareScannerEnabled) {
@@ -992,6 +1209,46 @@ export default function StaffScannerPage() {
     refreshPendingCount();
   }, []);
 
+  /*
+   * بعد ترقية IndexedDB نعيد الحالات المؤقتة القديمة إلى Queue تلقائيًا.
+   * لا نحذف أي عملية، ولا نغير operationId أو QR.
+   */
+  useEffect(() => {
+    const currentEventId = activeContext.eventId;
+
+    if (!isReady || !currentEventId) {
+      return;
+    }
+
+    if (recoveredOfflineEventRef.current === currentEventId) {
+      return;
+    }
+
+    recoveredOfflineEventRef.current = currentEventId;
+
+    void (async () => {
+      try {
+        const recovered = await recoverRetryableOfflineFailures();
+
+        await refreshPendingCount();
+
+        if (recovered.total > 0 && navigator.onLine) {
+          await syncOfflineQueue({
+            silent: true,
+            force: true,
+          });
+        }
+      } catch (error) {
+        console.warn("Could not auto-recover temporary offline work:", error);
+
+        /*
+         * نسمح بمحاولة جديدة في نفس الجلسة إذا فشل فتح IndexedDB مؤقتًا.
+         */
+        recoveredOfflineEventRef.current = "";
+      }
+    })();
+  }, [activeContext.eventId, isReady]);
+
   useEffect(() => {
     return () => {
       stopCamera();
@@ -1104,6 +1361,53 @@ export default function StaffScannerPage() {
     setPermanentFailedCount(permanentFailed);
   }
 
+  async function recoverFailedOfflineWork() {
+    if (!isOnline || !isReady || isRecoveringFailures || isSyncingQueue) {
+      return;
+    }
+
+    setIsRecoveringFailures(true);
+
+    try {
+      const recovered = await recoverRetryableOfflineFailures();
+
+      await refreshPendingCount();
+      await reloadCurrentVisitorResults();
+
+      if (recovered.total === 0) {
+        toast.info(
+          "لا توجد حالات مؤقتة قابلة للاستعادة. الحالات المتبقية تحتاج مراجعة بياناتها.",
+          {
+            id: "staff-recovery-empty",
+          },
+        );
+
+        return;
+      }
+
+      toast.success(
+        `تمت إعادة ${recovered.total} عملية مؤقتة إلى قائمة المزامنة.`,
+        {
+          id: "staff-recovery-ready",
+        },
+      );
+
+      await syncOfflineQueue({
+        silent: false,
+        force: true,
+      });
+    } catch (error) {
+      console.error("Could not recover failed offline work:", error);
+
+      toast.error("تعذر تجهيز العمليات المؤقتة لإعادة المزامنة.", {
+        id: "staff-recovery-error",
+      });
+    } finally {
+      setIsRecoveringFailures(false);
+      await refreshPendingCount();
+    }
+  }
+
   async function reloadCurrentVisitorResults(options?: {
     fallbackSearch?: string;
   }) {
@@ -1162,7 +1466,64 @@ export default function StaffScannerPage() {
       return;
     }
 
-    if (!isReady) {
+    let syncContext = activeContext;
+
+    try {
+      /*
+       * نجدد الجلسة قبل كل جولة مزامنة. Endpoint الباك أصبح idempotent
+       * ويعيد نفس Session بدل إنهائها وإنشاء واحدة جديدة.
+       */
+      const renewedSession = await ensureActiveScannerSession({
+        force: true,
+      });
+
+      const renewedSessionRecord = renewedSession as Record<string, unknown>;
+
+      const renewedDeviceLabel =
+        [
+          renewedSessionRecord.deviceLabel,
+          renewedSessionRecord.deviceName,
+          renewedSessionRecord.deviceCode,
+        ]
+          .find(
+            (value): value is string =>
+              typeof value === "string" && value.trim().length > 0,
+          )
+          ?.trim() || renewedSession.deviceId;
+
+      syncContext = {
+        eventId: renewedSession.eventId,
+        checkpointId: renewedSession.checkpointId,
+        deviceId: renewedSession.deviceId,
+        staffSessionId: renewedSession.staffSessionId,
+
+        eventTitle: renewedSession.eventTitle,
+        checkpointName: renewedSession.checkpointName,
+        checkpointType: renewedSession.checkpointType ?? null,
+
+        deviceLabel: renewedDeviceLabel,
+      };
+    } catch (error) {
+      console.warn("Could not renew scanner session before sync:", error);
+
+      if (!silent) {
+        toast.error(
+          "تعذر تجهيز جلسة السكانر للمزامنة. ستتم المحاولة تلقائيًا.",
+          {
+            id: "staff-sync-session-renewal-failed",
+          },
+        );
+      }
+
+      return;
+    }
+
+    if (
+      !syncContext.eventId ||
+      !syncContext.deviceId ||
+      !syncContext.checkpointId ||
+      !syncContext.staffSessionId
+    ) {
       if (!silent) {
         toast.info("جلسة السكانر غير جاهزة للمزامنة بعد.", {
           id: "staff-sync-not-ready",
@@ -1189,8 +1550,8 @@ export default function StaffScannerPage() {
         registerVisitor: (eventId, payload) =>
           syncOfflineStaffRegistration({
             eventId,
-            deviceId: activeContext.deviceId,
-            staffSessionId: activeContext.staffSessionId,
+            deviceId: syncContext.deviceId,
+            staffSessionId: syncContext.staffSessionId,
             deviceApiKey: activeDeviceApiKey,
             payload,
           }),
@@ -1245,6 +1606,18 @@ export default function StaffScannerPage() {
       }
 
       const scanResult = await syncQueuedScans({
+        preparePayload: (payload) => ({
+          ...payload,
+          eventId: syncContext.eventId,
+          deviceId: syncContext.deviceId,
+          checkpointId: syncContext.checkpointId,
+          staffSessionId: syncContext.staffSessionId,
+          payload: {
+            ...(payload.payload ?? {}),
+            originalStaffSessionId: payload.staffSessionId,
+            sessionReboundAt: new Date().toISOString(),
+          },
+        }),
         submitScan: (payload) =>
           createScanMutation.mutateAsync({
             payload,
@@ -1386,13 +1759,119 @@ export default function StaffScannerPage() {
     );
   }
 
+  function getHttpErrorMessage(error: unknown) {
+    if (!error || typeof error !== "object" || !("response" in error)) {
+      return "";
+    }
+
+    const response = (
+      error as {
+        response?: {
+          data?: {
+            message?: string | string[];
+            code?: string;
+            errorCode?: string;
+          };
+        };
+      }
+    ).response;
+
+    const rawMessage = response?.data?.message;
+    const message = Array.isArray(rawMessage)
+      ? rawMessage.join(" ")
+      : rawMessage || "";
+
+    return [response?.data?.code, response?.data?.errorCode, message]
+      .filter(Boolean)
+      .join(" ")
+      .toUpperCase();
+  }
+
+  function getHttpErrorStatus(error: unknown) {
+    if (!error || typeof error !== "object" || !("response" in error)) {
+      return undefined;
+    }
+
+    const response = (
+      error as {
+        response?: {
+          status?: number;
+        };
+      }
+    ).response;
+
+    return response?.status;
+  }
+
+  function isStaleStaffSessionError(error: unknown) {
+    const message = getHttpErrorMessage(error);
+
+    return (
+      message.includes("STAFF SESSION MUST BE ACTIVE") ||
+      message.includes("STAFF SESSION WAS NOT FOUND") ||
+      message.includes("STAFF_SESSION_INACTIVE")
+    );
+  }
+
+  function isRetryableScanSubmissionError(error: unknown) {
+    const status = getHttpErrorStatus(error);
+    const message = getHttpErrorMessage(error);
+
+    return (
+      isStaleStaffSessionError(error) ||
+      message.includes("OFFLINE_REGISTRATION_NOT_SYNCED") ||
+      message.includes("OFFLINE_QR_NOT_SYNCED") ||
+      status === 401 ||
+      status === 403 ||
+      status === 408 ||
+      status === 425 ||
+      status === 429 ||
+      Boolean(status && status >= 500)
+    );
+  }
+
+  async function submitOnlineScanWithSessionRecovery(
+    payload: CreateScanPayload,
+  ) {
+    try {
+      return await createScanMutation.mutateAsync({
+        payload: toServerScanPayload(payload),
+        deviceApiKey: activeDeviceApiKey,
+      });
+    } catch (error) {
+      if (!isStaleStaffSessionError(error)) {
+        throw error;
+      }
+
+      const renewedContext = await ensureActiveScannerSession({ force: true });
+
+      const reboundPayload: CreateScanPayload = {
+        ...payload,
+        eventId: renewedContext.eventId,
+        deviceId: renewedContext.deviceId,
+        checkpointId: renewedContext.checkpointId,
+        staffSessionId: renewedContext.staffSessionId,
+        payload: {
+          ...(payload.payload ?? {}),
+          originalStaffSessionId: payload.staffSessionId,
+          sessionReboundAt: new Date().toISOString(),
+        },
+      };
+
+      return createScanMutation.mutateAsync({
+        payload: toServerScanPayload(reboundPayload),
+        deviceApiKey: activeDeviceApiKey,
+      });
+    }
+  }
+
   function clearScanResult() {
     setRawScanResult(null);
     setSelectedVisitor(null);
     setVisitorSource("lookup");
     setCameraError("");
     setLastOfflineSaved(false);
-    isProcessingScanRef.current = false;
+    releaseScanProcessingLock();
   }
 
   function validateScan(token: string) {
@@ -1401,7 +1880,7 @@ export default function StaffScannerPage() {
       return false;
     }
 
-    if (!token.trim()) {
+    if (!normalizeQrToken(token)) {
       setCameraError("لا يوجد QR Token لتنفيذ السكان.");
       toast.error("لا يوجد QR Token لهذا الزائر.");
       return false;
@@ -1421,7 +1900,7 @@ export default function StaffScannerPage() {
       deviceId: activeContext.deviceId,
       staffSessionId: activeContext.staffSessionId,
       checkpointId: activeContext.checkpointId,
-      qrToken: token.trim(),
+      qrToken: normalizeQrToken(token),
       registrationId: registrationId || undefined,
       type: scanType,
       scannedAtDevice: new Date().toISOString(),
@@ -1474,7 +1953,10 @@ export default function StaffScannerPage() {
   ): Promise<StaffScannerVisitor> {
     const preview = getVisitorInfoFromStaffVisitor(visitor);
 
-    const token = scannedQrToken.trim() || preview.qrToken || "";
+    const token =
+      normalizeQrToken(scannedQrToken) ||
+      normalizeQrToken(preview.qrToken) ||
+      "";
 
     const storedToken = getVisitorQrToken(visitor);
 
@@ -1566,16 +2048,13 @@ export default function StaffScannerPage() {
         );
       }
 
-      isProcessingScanRef.current = false;
+      releaseScanProcessingLock();
 
       return;
     }
 
     try {
-      const data = await createScanMutation.mutateAsync({
-        payload: toServerScanPayload(payload),
-        deviceApiKey: activeDeviceApiKey,
-      });
+      const data = await submitOnlineScanWithSessionRecovery(payload);
 
       const responseVisitor = getVisitorInfoFromScan(data);
 
@@ -1623,6 +2102,10 @@ export default function StaffScannerPage() {
         qrImageUrl: responseQrImageUrl || preview?.qrImageUrl || "",
       };
 
+      const pendingReconciliation =
+        data.pendingReconciliation === true ||
+        data.reason === "OFFLINE_REGISTRATION_NOT_SYNCED";
+
       setRawScanResult(data);
       setSelectedVisitor(finalVisitor);
       setVisitorSource("scan");
@@ -1630,21 +2113,46 @@ export default function StaffScannerPage() {
 
       revealVisitorResult();
 
-      isProcessingScanRef.current = false;
+      releaseScanProcessingLock();
 
-      if (isAllowedResult(data)) {
+      if (pendingReconciliation) {
+        toast.warning(
+          `تم حفظ مسح ${finalVisitor.fullName} على السيرفر، وسيُربط تلقائيًا بعد اكتمال مزامنة التسجيل.`,
+          { id: `pending-reconciliation-${payload.operationId}` },
+        );
+      } else if (isAllowedResult(data)) {
         toast.success(`تم السماح بدخول ${finalVisitor.fullName}.`);
       } else {
         toast.error(getResultMessage(data));
       }
 
       if ("vibrate" in navigator) {
-        navigator.vibrate?.(isAllowedResult(data) ? 120 : [120, 80, 120]);
+        navigator.vibrate?.(
+          pendingReconciliation
+            ? [80, 60, 80]
+            : isAllowedResult(data)
+              ? 120
+              : [120, 80, 120],
+        );
       }
     } catch (error) {
-      if (!hasHttpResponse(error)) {
-        setIsOnline(false);
-        await addScanToQueue(payload);
+      const networkFailure = !hasHttpResponse(error);
+      const retryableFailure =
+        networkFailure || isRetryableScanSubmissionError(error);
+
+      if (retryableFailure) {
+        if (networkFailure) {
+          setIsOnline(false);
+        }
+
+        await addScanToQueue({
+          ...payload,
+          payload: {
+            ...(payload.payload ?? {}),
+            queuedAfterOnlineFailure: true,
+            queuedFailureMessage: getHttpErrorMessage(error) || undefined,
+          },
+        });
         await refreshPendingCount();
 
         setRawScanResult(null);
@@ -1657,21 +2165,37 @@ export default function StaffScannerPage() {
           revealVisitorResult();
 
           toast.warning(
-            `تم التعرف على ${preview.fullName}. تعذر الاتصال، لذلك حُفظت عملية الدخول محليًا.`,
+            networkFailure
+              ? `تم التعرف على ${preview.fullName}. تعذر الاتصال، لذلك حُفظت عملية الدخول محليًا.`
+              : `تم التعرف على ${preview.fullName}. تعذر تنفيذ المسح مؤقتًا، وسيُعاد رفعه تلقائيًا.`,
+            {
+              id: `queued-temporary-scan-${payload.operationId}`,
+            },
           );
         } else {
           setSelectedVisitor(null);
           setLastOfflineSaved(true);
 
           toast.warning(
-            "تعذر الاتصال بالسيرفر، وتم حفظ المسح محليًا، لكن لم نجد بيانات الزائر في المخزن.",
+            networkFailure
+              ? "تعذر الاتصال بالسيرفر، وتم حفظ المسح محليًا، لكن لم نجد بيانات الزائر في المخزن."
+              : "تعذر تنفيذ المسح مؤقتًا، فتم حفظه محليًا وسيُعاد رفعه تلقائيًا.",
+            {
+              id: `queued-temporary-scan-${payload.operationId}`,
+            },
           );
         }
       } else {
-        toast.error("تعذر تنفيذ عملية المسح على السيرفر.");
+        const errorMessage = getHttpErrorMessage(error);
+
+        toast.error(
+          errorMessage.includes("INVALID")
+            ? "رمز QR غير صالح أو لا يتبع هذه الفعالية."
+            : "تعذر تنفيذ عملية المسح على السيرفر.",
+        );
       }
 
-      isProcessingScanRef.current = false;
+      releaseScanProcessingLock();
     }
   }
 
@@ -1792,6 +2316,8 @@ export default function StaffScannerPage() {
     if (!token) return;
     if (!validateScan(token)) return;
 
+    if (!acquireScanProcessingLock()) return;
+
     setScanningVisitorId(visitor.id);
 
     try {
@@ -1799,12 +2325,11 @@ export default function StaffScannerPage() {
       setSelectedVisitor(null);
       setVisitorSource("scan");
       setLastOfflineSaved(false);
-      isProcessingScanRef.current = true;
 
       await submitPayload(buildPayload(token, visitor.id), visitor);
     } finally {
       setScanningVisitorId("");
-      isProcessingScanRef.current = false;
+      releaseScanProcessingLock();
     }
   }
 
@@ -1812,12 +2337,10 @@ export default function StaffScannerPage() {
     const token = extractQrToken(decodedText);
 
     if (!token) return;
-    if (isProcessingScanRef.current) return;
-
-    isProcessingScanRef.current = true;
+    if (!acquireScanProcessingLock()) return;
 
     if (!validateScan(token)) {
-      isProcessingScanRef.current = false;
+      releaseScanProcessingLock();
       return;
     }
 
@@ -2064,9 +2587,8 @@ export default function StaffScannerPage() {
         });
 
         if (!deltaResult.requiresSnapshot) {
-          effectiveCachedCount = await getCachedStaffVisitorsCount(
-            currentEventId,
-          );
+          effectiveCachedCount =
+            await getCachedStaffVisitorsCount(currentEventId);
           effectiveTotal = deltaResult.visitorsCount;
         }
       }
@@ -2087,9 +2609,7 @@ export default function StaffScannerPage() {
 
       if (!options?.silent) {
         if (result.completed) {
-          toast.success(
-            `تم تجهيز مخزن الزوار: ${effectiveCachedCount} زائر.`,
-          );
+          toast.success(`تم تجهيز مخزن الزوار: ${effectiveCachedCount} زائر.`);
         } else if (result.pausedOffline) {
           toast.info(
             `توقف التحميل مؤقتًا عند ${result.downloadedCount} زائر وسيُستكمل عند عودة الاتصال.`,
@@ -2798,7 +3318,8 @@ export default function StaffScannerPage() {
     setSelectedVisitor(null);
     setVisitorSource("scan");
     setLastOfflineSaved(false);
-    isProcessingScanRef.current = true;
+
+    if (!acquireScanProcessingLock()) return;
 
     await submitPayload(buildPayload(token, displayRegistrationId));
   }
@@ -3161,6 +3682,14 @@ export default function StaffScannerPage() {
         fields,
       };
 
+      const cameraWasRunning = isCameraOpen || Boolean(controlsRef.current);
+
+      resumeCameraAfterBadgeRef.current = cameraWasRunning;
+
+      if (cameraWasRunning) {
+        await stopCamera();
+      }
+
       setBadgePreviewData(badgeData);
 
       setBadgePreviewVisitor({
@@ -3181,6 +3710,26 @@ export default function StaffScannerPage() {
 
   async function printVisitorBadge(visitor: StaffVisitor) {
     await openBadgePreview(visitor.id, visitor);
+  }
+
+  async function closeBadgePreview() {
+    const shouldResumeCamera = resumeCameraAfterBadgeRef.current;
+
+    resumeCameraAfterBadgeRef.current = false;
+
+    setBadgePreviewOpen(false);
+    setBadgePreviewData(null);
+    setBadgePreviewVisitor(null);
+
+    restoreScannerInputAfterPrint();
+
+    if (shouldResumeCamera) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 150);
+      });
+
+      await startCamera();
+    }
   }
 
   async function printDisplayVisitorBadge() {
@@ -3223,7 +3772,7 @@ export default function StaffScannerPage() {
     setSelectedVisitor(null);
     setVisitorSource("scan");
     setLastOfflineSaved(false);
-    isProcessingScanRef.current = false;
+    releaseScanProcessingLock();
 
     if (!isReady) {
       setCameraError("جاري تجهيز جلسة السكانر، انتظر لحظات ثم حاول مجددًا.");
@@ -3411,25 +3960,51 @@ export default function StaffScannerPage() {
               ) : null}
             </div>
 
-            <Button
-              variant="outline"
-              disabled={
-                !isOnline || !isReady || isSyncingQueue || pendingCount === 0
-              }
-              onClick={() =>
-                void syncOfflineQueue({
-                  silent: false,
-                  force: true,
-                })
-              }
-            >
-              {isSyncingQueue ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              مزامنة الآن
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {permanentFailedCount > 0 ? (
+                <Button
+                  variant="outline"
+                  disabled={
+                    !isOnline ||
+                    !isReady ||
+                    isSyncingQueue ||
+                    isRecoveringFailures
+                  }
+                  onClick={() => void recoverFailedOfflineWork()}
+                >
+                  {isRecoveringFailures ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                  استعادة المعلّقات
+                </Button>
+              ) : null}
+
+              <Button
+                variant="outline"
+                disabled={
+                  !isOnline ||
+                  !isReady ||
+                  isSyncingQueue ||
+                  isRecoveringFailures ||
+                  pendingCount === 0
+                }
+                onClick={() =>
+                  void syncOfflineQueue({
+                    silent: false,
+                    force: true,
+                  })
+                }
+              >
+                {isSyncingQueue ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                مزامنة الآن
+              </Button>
+            </div>
           </section>
 
           <section
@@ -3636,11 +4211,8 @@ export default function StaffScannerPage() {
         data={badgePreviewData}
         visitor={badgePreviewVisitor}
         eventTitle={activeContext.eventTitle}
-        onClose={() => {
-          setBadgePreviewOpen(false);
-          setBadgePreviewData(null);
-          setBadgePreviewVisitor(null);
-        }}
+        onClose={() => void closeBadgePreview()}
+        onAfterPrint={restoreScannerInputAfterPrint}
       />
     </>
   );

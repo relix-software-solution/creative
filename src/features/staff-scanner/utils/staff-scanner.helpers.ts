@@ -267,6 +267,34 @@ export function createOperationId() {
   return `scan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+export function normalizeQrToken(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  /*
+   * بعض قارئات USB والكاميرات تضيف BOM أو محارف تحكم/Zero-width.
+   * هذه المحارف لا تظهر للمستخدم لكنها تكسر المطابقة الحرفية داخل
+   * IndexedDB وتؤدي إلى رسالة «رمز QR غير صالح».
+   */
+  return value
+    .trim()
+    .replace(/[\u0000-\u001F\u007F\u200B-\u200D\u2060\uFEFF\s]+/g, "");
+}
+
+function pickPreferredQrToken(values: unknown[]) {
+  const candidates = values
+    .map((value) => normalizeQrToken(value))
+    .filter(Boolean);
+
+  return (
+    candidates.find((token) => token.startsWith("Q2.")) ||
+    candidates.find((token) => token.startsWith("O2.")) ||
+    candidates[0] ||
+    ""
+  );
+}
+
 export function extractQrToken(value: string) {
   const text = value.trim();
 
@@ -276,47 +304,38 @@ export function extractQrToken(value: string) {
     const parsed = JSON.parse(text);
 
     if (isObject(parsed)) {
-      return firstText(
-        parsed.offlineQrToken,
-        parsed.compactQrToken,
+      return pickPreferredQrToken([
         parsed.canonicalQrToken,
-
+        parsed.compactQrToken,
         parsed.qrToken,
         parsed.token,
         parsed.value,
-
+        parsed.offlineQrToken,
         parsed.signedToken,
-      );
+      ]);
     }
   } catch {
     // Raw QR token.
   }
 
-  return text;
+  return normalizeQrToken(text);
 }
 
 export function getQrTokenFromQrResponse(value: unknown): string {
   if (!value) return "";
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return normalizeQrToken(value);
   if (!isObject(value)) return "";
 
-  const direct = firstText(
-    /*
-     * الرموز الأقصر أولًا.
-     */
-    value.offlineQrToken,
-    value.compactQrToken,
+  const direct = pickPreferredQrToken([
+    /* QR الرسمي أولًا، ثم مرجع O2 المحلي. */
     value.canonicalQrToken,
-
+    value.compactQrToken,
     value.qrToken,
     value.token,
     value.value,
-
-    /*
-     * التوكن الكامل يأتي أخيرًا.
-     */
+    value.offlineQrToken,
     value.signedToken,
-  );
+  ]);
 
   if (direct) return direct;
 
@@ -480,19 +499,15 @@ export function getVisitorQrToken(visitor?: StaffVisitor | null) {
   const nested = getQrTokenFromQrResponse(visitor.qr);
 
   /*
-   * نفضّل صراحة الرموز القصيرة:
-   *
-   * O2 = تسجيل Staff Offline
-   * Q2 = QR رسمي مختصر من الباك
+   * بعد المزامنة يجب استعمال Q2 الرسمي. يبقى O2 محفوظًا كـalias
+   * حتى تظل البادجات التي طُبعت أثناء Offline قابلة للمسح.
    */
-  const preferredShortToken = [
-    offlineQrToken,
+  const preferredShortToken = pickPreferredQrToken([
     canonicalQrToken,
     direct,
     nested,
-  ].find((token) => {
-    return token.startsWith("O2.") || token.startsWith("Q2.");
-  });
+    offlineQrToken,
+  ]);
 
   if (preferredShortToken) {
     return preferredShortToken;
@@ -506,9 +521,13 @@ export function getVisitorQrToken(visitor?: StaffVisitor | null) {
    */
   const offlineSignedQr = visitor.offlineSignedQr?.trim() || "";
 
-  return (
-    offlineQrToken || canonicalQrToken || direct || nested || offlineSignedQr
-  );
+  return pickPreferredQrToken([
+    canonicalQrToken,
+    direct,
+    nested,
+    offlineQrToken,
+    offlineSignedQr,
+  ]);
 }
 
 export function getVisitorQrImageUrl(visitor?: StaffVisitor | null) {

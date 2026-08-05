@@ -96,6 +96,8 @@ export type ScanResult = {
 
   pendingReconciliation?: boolean;
   provisional?: boolean;
+  retryable?: boolean;
+  offlineScanOperationId?: string;
 
   qr?: ScanQr | null;
 

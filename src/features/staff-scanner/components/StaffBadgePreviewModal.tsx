@@ -112,20 +112,6 @@ function hasBadgeValue(value: unknown) {
   return true;
 }
 
-function formatBadgePreviewValue(value: unknown) {
-  const isEmpty =
-    value === undefined ||
-    value === null ||
-    (typeof value === "string" && value.trim() === "") ||
-    (Array.isArray(value) && value.length === 0);
-
-  if (isEmpty) {
-    return "";
-  }
-
-  return formatCustomValue(value);
-}
-
 function firstBadgeValue(...values: unknown[]) {
   return values.find((value) => hasBadgeValue(value));
 }
@@ -502,6 +488,8 @@ function waitForImage(image: HTMLImageElement) {
   });
 }
 
+let activeBadgePrintFrame: HTMLIFrameElement | null = null;
+
 export function StaffBadgePreviewModal({
   open,
   theme,
@@ -509,6 +497,7 @@ export function StaffBadgePreviewModal({
   visitor,
   eventTitle: _eventTitle,
   onClose,
+  onAfterPrint,
 }: {
   open: boolean;
   theme: StaffScannerTheme;
@@ -516,6 +505,7 @@ export function StaffBadgePreviewModal({
   visitor: StaffVisitor | null;
   eventTitle: string;
   onClose: () => void;
+  onAfterPrint?: () => void;
 }) {
   const badgePrintRef = useRef<HTMLDivElement | null>(null);
 
@@ -612,7 +602,12 @@ export function StaffBadgePreviewModal({
         },
       });
 
+      if (activeBadgePrintFrame?.isConnected) {
+        activeBadgePrintFrame.remove();
+      }
+
       const printFrame = document.createElement("iframe");
+      activeBadgePrintFrame = printFrame;
 
       printFrame.setAttribute("aria-hidden", "true");
 
@@ -752,6 +747,21 @@ export function StaffBadgePreviewModal({
       });
 
       let removed = false;
+      let notified = false;
+
+      const notifyMainScanner = () => {
+        if (notified) return;
+        notified = true;
+
+        window.focus();
+
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement) {
+          activeElement.blur();
+        }
+
+        onAfterPrint?.();
+      };
 
       const removeFrame = () => {
         if (removed) {
@@ -760,21 +770,34 @@ export function StaffBadgePreviewModal({
 
         removed = true;
 
+        if (activeBadgePrintFrame === printFrame) {
+          activeBadgePrintFrame = null;
+        }
+
         if (printFrame.isConnected) {
           printFrame.remove();
         }
+
+        notifyMainScanner();
       };
 
       printWindow.addEventListener("afterprint", removeFrame, {
         once: true,
       });
 
-      window.setTimeout(removeFrame, 60_000);
+      /*
+       * بعض تعريفات الطابعات لا تطلق afterprint. إبقاء iframe مع PNG
+       * كبير لعدة طبعات كان يوقف الكاميرا وقارئ USB بعد طبعتين أو ثلاث.
+       */
+      window.setTimeout(removeFrame, 5_000);
 
       printWindow.focus();
       printWindow.print();
+
+      window.setTimeout(notifyMainScanner, 250);
     } catch (error) {
       console.error("Could not print badge preview:", error);
+      onAfterPrint?.();
     }
   }
 
@@ -943,7 +966,7 @@ export function StaffBadgePreviewModal({
                   qrImageUrl,
                 );
 
-                const formattedValue = formatBadgePreviewValue(value);
+                const formattedValue = formatCustomValue(value);
 
                 const textAlign = getTextAlignment(layout);
 

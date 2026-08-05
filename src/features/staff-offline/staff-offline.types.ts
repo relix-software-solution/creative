@@ -42,6 +42,7 @@ export type StaffSyncOperationResult = {
 
   errorCode?: string | null;
   errorMessage?: string | null;
+  retryable?: boolean | null;
 };
 
 export type StaffSyncBatchRequest = {
