@@ -8,6 +8,18 @@ export type RegistrationStatus =
 
 export type RegistrationSource = "ADMIN" | "PUBLIC" | "IMPORT" | string;
 
+
+export type RegistrationFieldSummary = {
+  id: string;
+  attendeeTypeId?: string | null;
+  key: string;
+  labelAr: string;
+  labelEn?: string | null;
+  type?: string | null;
+  isActive?: boolean;
+  sortOrder?: number;
+};
+
 export type RegistrationQrObject = {
   qrToken?: string | null;
   token?: string | null;
@@ -55,6 +67,7 @@ export type Registration = {
     id: string;
     titleAr: string;
     titleEn?: string | null;
+    registrationFields?: RegistrationFieldSummary[];
   } | null;
 
   attendeeType?: {

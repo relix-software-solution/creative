@@ -51,6 +51,11 @@ import {
   useRegistrations,
   useUpdateRegistration,
 } from "@/features/registrations/registrations.queries";
+import {
+  buildRegistrationCustomFieldsForEdit,
+  getRegistrationDynamicFieldItems,
+  isBaseRegistrationFieldKey,
+} from "@/features/registrations/registration-dynamic-fields";
 import { Registration } from "@/features/registrations/registrations.types";
 import { usePublicEvent } from "@/features/public-events/public-events.queries";
 import { PublicRegistrationField } from "@/features/public-events/public-events.types";
@@ -99,18 +104,6 @@ function formatDate(value?: string | null) {
   }).format(date);
 }
 
-function stringifyCustomFields(value?: Record<string, unknown> | null) {
-  if (!value || Object.keys(value).length === 0) return "";
-
-  return JSON.stringify(value, null, 2);
-}
-
-function parseCustomFields(value?: string) {
-  if (!value || !value.trim()) return {};
-
-  return JSON.parse(value) as Record<string, unknown>;
-}
-
 function normalizePayload(
   values: RegistrationFormValues,
   fields: PublicRegistrationField[],
@@ -121,20 +114,11 @@ function normalizePayload(
     attendeeTypeId: values.attendeeTypeId,
     fullName: values.fullName.trim(),
     phone: values.phone?.trim() || undefined,
-    email: values.email?.trim() || undefined,
     externalId: values.externalId?.trim() || undefined,
     customFields: normalizeCustomFieldsForSubmit(fields, customValues),
     notes: values.notes?.trim() || undefined,
     source: "ADMIN" as const,
   };
-}
-
-function formatCustomFieldValue(value: unknown) {
-  if (value === null || value === undefined || value === "") return "—";
-  if (typeof value === "boolean") return value ? "نعم" : "لا";
-  if (Array.isArray(value)) return value.map(String).join("، ");
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
 }
 
 function getVisibleRegistrationFields(
@@ -143,8 +127,12 @@ function getVisibleRegistrationFields(
 ) {
   return (fields ?? [])
     .filter((field) => field.isActive !== false)
+    .filter((field) => !isBaseRegistrationFieldKey(field.key))
     .filter(
-      (field) => !attendeeTypeId || field.attendeeTypeId === attendeeTypeId,
+      (field) =>
+        !attendeeTypeId ||
+        !field.attendeeTypeId ||
+        field.attendeeTypeId === attendeeTypeId,
     )
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
@@ -226,12 +214,8 @@ export default function RegistrationsPage() {
       attendeeTypeId: "",
       fullName: "",
       phone: "",
-      email: "",
-      companyName: "",
-      jobTitle: "",
       externalId: "",
       notes: "",
-      customFieldsJson: "",
     },
   });
 
@@ -293,12 +277,8 @@ export default function RegistrationsPage() {
       attendeeTypeId: attendeeTypeFilter || "",
       fullName: "",
       phone: "",
-      email: "",
-      companyName: "",
-      jobTitle: "",
       externalId: "",
       notes: "",
-      customFieldsJson: "",
     });
 
     setFormModalOpen(true);
@@ -308,19 +288,20 @@ export default function RegistrationsPage() {
     setSelectedRegistration(registration);
     setPendingAction(null);
     setPendingValues(null);
-    setCustomFields(registration.customFields ?? {});
+    setCustomFields(
+      buildRegistrationCustomFieldsForEdit(
+        registration,
+        registration.event?.registrationFields,
+      ),
+    );
 
     form.reset({
       eventId: registration.eventId,
       attendeeTypeId: registration.attendeeTypeId,
       fullName: registration.fullName ?? "",
       phone: registration.phone ?? "",
-      email: registration.email ?? "",
-      companyName: registration.companyName ?? "",
-      jobTitle: registration.jobTitle ?? "",
       externalId: registration.externalId ?? "",
       notes: registration.notes ?? "",
-      customFieldsJson: stringifyCustomFields(registration.customFields),
     });
 
     setFormModalOpen(true);
@@ -791,41 +772,54 @@ export default function RegistrationsPage() {
 
                         <TableCell className="align-top">
                           <div className="min-w-0">
-                            <p dir="ltr" className="truncate text-right">
+                            <p dir="ltr" className="truncate text-right font-bold">
                               {registration.phone || "—"}
-                            </p>
-
-                            <p className="mt-1 truncate text-xs font-bold text-[#4B4B4B]/45">
-                              {registration.email || "—"}
                             </p>
                           </div>
                         </TableCell>
 
                         <TableCell className="align-top">
                           <div className="min-w-0 space-y-1">
-                            {registration.customFields &&
-                            Object.keys(registration.customFields).length >
-                              0 ? (
-                              Object.entries(registration.customFields)
-                                .slice(0, 2)
-                                .map(([key, value]) => (
-                                  <p
-                                    key={key}
-                                    className="truncate text-xs font-bold"
-                                  >
-                                    <span className="text-[#4B4B4B]/45">
-                                      {key}:{" "}
-                                    </span>
-                                    <span className="text-[#4B4B4B]">
-                                      {formatCustomFieldValue(value)}
-                                    </span>
+                            {(() => {
+                              const fields = getRegistrationDynamicFieldItems(
+                                registration,
+                                registration.event?.registrationFields,
+                              );
+                              const preview = fields.slice(0, 3);
+
+                              if (preview.length === 0) {
+                                return (
+                                  <p className="text-sm font-bold text-[#4B4B4B]/40">
+                                    —
                                   </p>
-                                ))
-                            ) : (
-                              <p className="text-sm font-bold text-[#4B4B4B]/40">
-                                —
-                              </p>
-                            )}
+                                );
+                              }
+
+                              return (
+                                <>
+                                  {preview.map((field) => (
+                                    <p
+                                      key={field.key}
+                                      className="truncate text-xs font-bold"
+                                      title={`${field.label}: ${field.formattedValue}`}
+                                    >
+                                      <span className="text-[#4B4B4B]/45">
+                                        {field.label}: {" "}
+                                      </span>
+                                      <span className="text-[#4B4B4B]">
+                                        {field.formattedValue}
+                                      </span>
+                                    </p>
+                                  ))}
+
+                                  {fields.length > preview.length ? (
+                                    <p className="text-[11px] font-extrabold text-[#A88042]">
+                                      +{fields.length - preview.length} حقول إضافية
+                                    </p>
+                                  ) : null}
+                                </>
+                              );
+                            })()}
                           </div>
                         </TableCell>
 
@@ -1056,14 +1050,6 @@ export default function RegistrationsPage() {
             error={form.formState.errors.phone?.message}
             disabled={isSubmitting}
             {...form.register("phone")}
-          />
-
-          <Input
-            label="البريد الإلكتروني"
-            placeholder="visitor@example.com"
-            error={form.formState.errors.email?.message}
-            disabled={isSubmitting}
-            {...form.register("email")}
           />
 
           {formRegistrationFields.length > 0 ? (

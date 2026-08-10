@@ -174,6 +174,18 @@ export type ClientAttendanceInfo = {
   lastCheckedOutAt?: string | null;
 };
 
+
+export type ClientRegistrationField = {
+  id: string;
+  attendeeTypeId?: string | null;
+  key: string;
+  labelAr: string;
+  labelEn?: string | null;
+  type?: string | null;
+  isActive?: boolean;
+  sortOrder?: number;
+};
+
 export type ClientRegistrationEventSummary = {
   id: string;
   titleAr: string;
@@ -193,16 +205,19 @@ export type ClientRegistrationEventDetails = Omit<
   descriptionAr?: string | null;
   descriptionEn?: string | null;
   venues: ClientVenueDetails[];
+  registrationFields: ClientRegistrationField[];
 };
 
 export type ClientRegistrationListItem = {
   id: string;
   publicId: string;
+  attendeeTypeId: string;
   fullName: string;
   phone?: string | null;
   email?: string | null;
   companyName?: string | null;
   jobTitle?: string | null;
+  customFields?: Record<string, unknown> | null;
   status: ClientRegistrationStatus;
   source: ClientRegistrationSource;
   registeredAt: string;

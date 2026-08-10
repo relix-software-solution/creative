@@ -4,12 +4,9 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   BadgeCheck,
-  BriefcaseBusiness,
-  Building2,
   CalendarClock,
   CheckCircle2,
   Clock3,
-  Mail,
   MapPin,
   Phone,
   RefreshCw,
@@ -26,6 +23,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { getRegistrationDynamicFieldItems } from "@/features/registrations/registration-dynamic-fields";
 import { useClientRegistration } from "../client-portal.queries";
 import {
   clientAttendanceStatusLabels,
@@ -131,6 +129,12 @@ export function ClientRegistrationDetailsPageContent({
     registration.attendeeType?.nameEn ||
     registration.attendeeType?.code;
 
+  const additionalFields = getRegistrationDynamicFieldItems(
+    registration,
+    registration.event.registrationFields,
+    { includeEmpty: true },
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -178,10 +182,16 @@ export function ClientRegistrationDetailsPageContent({
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <DetailRow icon={UserRound} label="الاسم الكامل" value={registration.fullName} />
             <DetailRow icon={Phone} label="رقم الهاتف" value={registration.phone} />
-            <DetailRow icon={Mail} label="البريد الإلكتروني" value={registration.email} />
-            <DetailRow icon={Building2} label="الشركة" value={registration.companyName} />
-            <DetailRow icon={BriefcaseBusiness} label="المسمى الوظيفي" value={registration.jobTitle} />
             <DetailRow icon={BadgeCheck} label="فئة الحضور" value={attendeeTypeName} />
+
+            {additionalFields.map((field) => (
+              <DetailRow
+                key={field.key}
+                icon={BadgeCheck}
+                label={field.label}
+                value={field.formattedValue}
+              />
+            ))}
           </CardContent>
         </Card>
 

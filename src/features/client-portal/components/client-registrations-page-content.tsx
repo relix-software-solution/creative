@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   BadgeCheck,
   Download,
-  Mail,
   Phone,
   RefreshCw,
   UserRound,
@@ -378,7 +377,7 @@ export function ClientRegistrationsPageContent() {
                           {registration.fullName}
                         </p>
                         <p className="mt-1 text-xs text-[#4B4B4B]/50">
-                          {registration.email || registration.phone || "—"}
+                          {registration.phone || "—"}
                         </p>
                       </div>
                     </TableCell>
@@ -482,10 +481,6 @@ export function ClientRegistrationsPageContent() {
                       {registration.attendeeType?.nameAr ||
                         registration.attendeeType?.nameEn ||
                         "—"}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Mail className="h-4 w-4 text-[#A88042]" />
-                      <span className="truncate">{registration.email || "—"}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <Phone className="h-4 w-4 text-[#A88042]" />
