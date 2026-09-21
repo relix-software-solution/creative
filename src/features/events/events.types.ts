@@ -1,3 +1,5 @@
+import type { BadgeAutoLayoutGroup, BadgeFieldLayoutValue } from "@/features/badge-templates/badge-layout";
+
 export type EventType = "EXHIBITION" | "CONFERENCE" | "WORKSHOP" | "OTHER";
 
 export type DuplicateStrategy = "PHONE" | "EMAIL" | "EXTERNAL_ID";
@@ -39,16 +41,8 @@ export type BadgeSelectedField = {
 };
 
 export type BadgeTemplateLayout = {
-  fields: Record<
-    string,
-    {
-      x?: number;
-      y?: number;
-      width?: number;
-      height?: number;
-      fontSize?: number;
-    }
-  >;
+  fields: Record<string, BadgeFieldLayoutValue>;
+  groups?: BadgeAutoLayoutGroup[];
 };
 
 export type BadgeTemplate = {

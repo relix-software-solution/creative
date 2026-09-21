@@ -3533,11 +3533,29 @@ export default function StaffScannerPage() {
       qrToken,
     };
 
-    if (key in fixedFields) {
-      return fixedFields[key] ?? null;
-    }
-
-    return visitor.customFields?.[key] ?? null;
+    // Prefer dynamic form answers, even for fields that used to be fixed.
+    // A saved badge template may still refer to companyName while a newer
+    // registration form stores the same information as company.
+    const normalized = (value: string) =>
+      value.replace(/[\s_.:\-/]+/g, "").toLowerCase();
+    const normalizedKey = normalized(key);
+    const equivalent = normalizedKey === "company" || normalizedKey === "companyname"
+      ? ["company", "companyname"]
+      : normalizedKey === "jobtitle" || normalizedKey === "position"
+        ? ["jobtitle", "position"]
+        : [normalizedKey];
+    const custom = visitor.customFields ?? {};
+    const hasValue = (value: unknown) => value != null &&
+      !(typeof value === "string" && value.trim() === "");
+    if (hasValue(custom[key])) return custom[key];
+    const matchingKey = Object.keys(custom).find(
+      (item) => equivalent.includes(normalized(item)) && hasValue(custom[item]),
+    );
+    if (matchingKey) return custom[matchingKey];
+    if (key in fixedFields) return fixedFields[key] ?? null;
+    if (normalizedKey === "company") return visitor.companyName ?? null;
+    if (normalizedKey === "position") return visitor.jobTitle ?? null;
+    return null;
   }
 
   async function openBadgePreview(

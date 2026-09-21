@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+const backendOrigin = process.env.BACKEND_ORIGIN || "http://127.0.0.1:3000";
+
 const nextConfig: NextConfig = {
   allowedDevOrigins: [
     "*.trycloudflare.com",
@@ -10,11 +12,11 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/v1/:path*",
-        destination: "http://localhost:3000/api/v1/:path*",
+        destination: `${backendOrigin}/api/v1/:path*`,
       },
       {
         source: "/uploads/:path*",
-        destination: "http://localhost:3000/uploads/:path*",
+        destination: `${backendOrigin}/uploads/:path*`,
       },
     ];
   },

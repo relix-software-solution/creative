@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Ban,
   CheckCircle2,
+  Download,
   Edit,
   Loader2,
   Plus,
@@ -48,6 +49,7 @@ import {
   useCancelRegistration,
   useCreateRegistration,
   useDeleteRegistration,
+  useExportRegistrations,
   useRegistrations,
   useUpdateRegistration,
 } from "@/features/registrations/registrations.queries";
@@ -203,6 +205,7 @@ export default function RegistrationsPage() {
   const createRegistrationMutation = useCreateRegistration();
   const updateRegistrationMutation = useUpdateRegistration();
   const deleteRegistrationMutation = useDeleteRegistration();
+  const exportRegistrationsMutation = useExportRegistrations();
   const activateRegistrationMutation = useActivateRegistration();
   const cancelRegistrationMutation = useCancelRegistration();
   const blockRegistrationMutation = useBlockRegistration();
@@ -337,6 +340,15 @@ export default function RegistrationsPage() {
     setStatusFilter("");
     setSearchInput("");
     setSearch("");
+  }
+
+  function exportRows() {
+    exportRegistrationsMutation.mutate({
+      eventId: eventFilter || undefined,
+      attendeeTypeId: attendeeTypeFilter || undefined,
+      status: statusFilter || undefined,
+      search: search || undefined,
+    });
   }
 
   function requestSubmit(values: RegistrationFormValues) {
@@ -500,10 +512,23 @@ export default function RegistrationsPage() {
         title="إدارة التسجيلات"
         description="إنشاء وإدارة تسجيلات الحضور يدويًا من لوحة الإدارة، مع تفعيل أو إلغاء أو حظر التسجيل."
         actions={
-          <Button onClick={openCreateModal}>
-            <Plus className="h-4 w-4" />
-            إضافة تسجيل
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={exportRows}
+              isLoading={exportRegistrationsMutation.isPending}
+              disabled={registrationsQuery.isLoading}
+            >
+              <Download className="h-4 w-4" />
+              تصدير Excel
+            </Button>
+
+            <Button onClick={openCreateModal}>
+              <Plus className="h-4 w-4" />
+              إضافة تسجيل
+            </Button>
+          </>
         }
       />
 

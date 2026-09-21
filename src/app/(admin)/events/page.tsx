@@ -23,6 +23,7 @@ import {
 } from "@/features/events/events.queries";
 import { EventFormValues, eventSchema } from "@/features/events/events.schema";
 import { EventItem } from "@/features/events/events.types";
+import { normalizeBadgeAutoLayoutGroups } from "@/features/badge-templates/badge-layout";
 import { BadgeState } from "./_components/EventBadgeSection";
 import { EventBadgeDialog } from "./_components/EventBadgeDialog";
 import { EventFormModal } from "./_components/EventFormModal";
@@ -30,6 +31,7 @@ import { EventStatsCards } from "./_components/EventStatsCards";
 import { EventsTableCard } from "./_components/EventsTableCard";
 import { RegistrationQrModal } from "./_components/RegistrationQrModal";
 import {
+  BadgeAutoLayoutGroup,
   BadgeFieldLayoutMap,
   BadgeVisibleMap,
   ImageType,
@@ -72,7 +74,10 @@ function getDefaultFieldLayout({
     x: 10,
     y: 20 + index * 12,
     width: 70,
+    height: key === "fullName" ? 13 : 10,
     fontSize: key === "fullName" ? 18 : 12,
+    textAlign: "right" as const,
+    verticalAlign: "center" as const,
   };
 }
 
@@ -151,7 +156,10 @@ export default function EventsPage() {
         x: 10,
         y: 20,
         width: 70,
+        height: 13,
         fontSize: 18,
+        textAlign: "right",
+        verticalAlign: "center",
       },
       qrCode: {
         x: 60,
@@ -161,6 +169,10 @@ export default function EventsPage() {
       },
     },
   );
+
+  const [badgeAutoLayoutGroups, setBadgeAutoLayoutGroups] = useState<
+    BadgeAutoLayoutGroup[]
+  >([]);
 
   const eventsParams = useMemo(
     () => ({
@@ -400,6 +412,9 @@ export default function EventsPage() {
     const badgeTemplate = badgeTemplateQuery.data;
     const selectedFields = badgeTemplate.selectedFields || [];
     const layoutFields = badgeTemplate.layout?.fields || {};
+    const layoutGroups = normalizeBadgeAutoLayoutGroups(
+      badgeTemplate.layout?.groups,
+    );
 
     const nextVisibleFields: BadgeVisibleMap = {};
     const nextLayout: BadgeFieldLayoutMap = {};
@@ -417,11 +432,12 @@ export default function EventsPage() {
 
       if (savedLayout) {
         nextLayout[field.key] = {
+          ...savedLayout,
           x: savedLayout.x ?? 10,
           y: savedLayout.y ?? 10,
-          width: savedLayout.width,
-          height: savedLayout.height,
-          fontSize: savedLayout.fontSize,
+          textAlign: savedLayout.textAlign ?? "right",
+          verticalAlign: savedLayout.verticalAlign ?? "center",
+          textDirection: savedLayout.textDirection ?? "auto",
         };
 
         return;
@@ -449,6 +465,7 @@ export default function EventsPage() {
       );
       setBadgeVisibleFields(nextVisibleFields);
       setBadgeFieldLayout(nextLayout);
+      setBadgeAutoLayoutGroups(layoutGroups);
     }, 0);
 
     return () => window.clearTimeout(timer);
@@ -485,7 +502,10 @@ export default function EventsPage() {
         x: 10,
         y: 20,
         width: 70,
+        height: 13,
         fontSize: 18,
+        textAlign: "right",
+        verticalAlign: "center",
       },
       qrCode: {
         x: 58,
@@ -494,6 +514,7 @@ export default function EventsPage() {
         height: 26,
       },
     });
+    setBadgeAutoLayoutGroups([]);
   }
 
   function resetAssets() {
@@ -772,6 +793,7 @@ export default function EventsPage() {
   function buildBadgeLayout() {
     return {
       fields: badgeFieldLayout,
+      groups: badgeAutoLayoutGroups,
     };
   }
 
@@ -1103,6 +1125,9 @@ export default function EventsPage() {
 
     fieldLayout: badgeFieldLayout,
     setFieldLayout: setBadgeFieldLayout,
+
+    autoLayoutGroups: badgeAutoLayoutGroups,
+    setAutoLayoutGroups: setBadgeAutoLayoutGroups,
   };
 
   return (

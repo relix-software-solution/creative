@@ -110,3 +110,8 @@ export type RegistrationsListResponse = {
   limit?: number;
   totalPages?: number;
 };
+
+export type RegistrationExportResult = {
+  blob: Blob;
+  filename: string;
+};

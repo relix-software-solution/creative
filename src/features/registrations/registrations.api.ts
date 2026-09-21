@@ -3,6 +3,7 @@ import { unwrapApiData } from "@/lib/api/unwrap-api-data";
 import {
   CreateRegistrationPayload,
   Registration,
+  RegistrationExportResult,
   RegistrationsListParams,
   RegistrationsListResponse,
   UpdateRegistrationPayload,
@@ -13,6 +14,29 @@ type RegistrationActionResponse = {
   message?: string;
   registration?: Registration;
 };
+
+function getDownloadFilename(
+  contentDisposition: string | undefined,
+  fallback: string,
+): string {
+  if (!contentDisposition) {
+    return fallback;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].replace(/["']/g, ""));
+    } catch {
+      return utf8Match[1].replace(/["']/g, "");
+    }
+  }
+
+  const regularMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+
+  return regularMatch?.[1]?.trim() || fallback;
+}
 
 function isVisibleRegistration(registration: Registration) {
   return (
@@ -93,6 +117,32 @@ export async function getRegistration(id: string) {
   const response = await adminClient.get(`/registrations/${id}`);
 
   return unwrapApiData<Registration>(response.data);
+}
+
+export async function exportRegistrations(
+  params: RegistrationsListParams = {},
+): Promise<RegistrationExportResult | null> {
+  const response = await adminClient.get("/registrations/export", {
+    params,
+    responseType: "blob",
+  });
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  const fallbackFilename = `admin-registrations-${new Date()
+    .toISOString()
+    .slice(0, 10)}.xlsx`;
+
+  const contentDisposition = response.headers["content-disposition"] as
+    | string
+    | undefined;
+
+  return {
+    blob: response.data as Blob,
+    filename: getDownloadFilename(contentDisposition, fallbackFilename),
+  };
 }
 
 export async function createRegistration(payload: CreateRegistrationPayload) {

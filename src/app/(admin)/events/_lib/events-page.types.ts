@@ -1,6 +1,12 @@
 import { ChangeEvent } from "react";
 import { UseFormReturn } from "react-hook-form";
 import { EventFormValues } from "@/features/events/events.schema";
+import type {
+  BadgeAutoLayoutGroup,
+  BadgeFieldLayoutValue,
+} from "@/features/badge-templates/badge-layout";
+
+export type { BadgeAutoLayoutGroup, BadgeFieldLayoutValue };
 
 export type ImageType = "logo" | "background" | "badgeBackground";
 
@@ -12,14 +18,6 @@ export type ImageChangeHandler = (
 ) => void;
 
 export type ImageRemoveHandler = (type: ImageType) => void;
-
-export type BadgeFieldLayoutValue = {
-  x: number;
-  y: number;
-  width?: number;
-  height?: number;
-  fontSize?: number;
-};
 
 export type BadgeFieldLayoutMap = Record<string, BadgeFieldLayoutValue>;
 

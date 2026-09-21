@@ -11,6 +11,17 @@ import {
 } from "@/features/staff-visitors/staff-visitors.api";
 import { AutoFitBadgeText } from "@/features/staff-scanner/components/AutoFitBadgeText";
 import {
+  badgeVerticalAlignToFlex,
+  computeBadgeAutoLayoutItems,
+  getGroupedBadgeFieldKeys,
+  normalizeBadgeAutoLayoutGroups,
+  normalizeBadgeHorizontalAlign,
+  normalizeBadgeVerticalAlign,
+  resolveBadgeTextDirection,
+  type BadgeAutoLayoutGroup,
+  type BadgeFieldLayoutValue,
+} from "@/features/badge-templates/badge-layout";
+import {
   escapePrintValue,
   formatCustomValue,
   getVisitorInfoFromStaffVisitor,
@@ -18,37 +29,11 @@ import {
 } from "../utils/staff-scanner.helpers";
 import { StaffScannerTheme } from "../utils/staff-scanner.types";
 
-type BadgeFieldLayout = {
-  x?: number;
-  y?: number;
-
-  width?: number;
-  height?: number;
-
-  fontSize?: number;
-
-  bold?: boolean;
-  fontWeight?: string | number;
-
-  textColor?: string;
-  boldColor?: string;
-
-  textAlign?: "left" | "center" | "right";
-
-  /**
-   * يمكن إضافته من إعدادات قالب البادج.
-   * الاسم الكامل يأخذ سطرين افتراضيًا.
-   */
-  maxLines?: number;
-
-  /**
-   * نسبة ارتفاع السطر.
-   */
-  lineHeight?: number;
-};
+type BadgeFieldLayout = Partial<BadgeFieldLayoutValue>;
 
 type BadgeLayoutRecord = {
   fields?: Record<string, BadgeFieldLayout>;
+  groups?: unknown;
   [key: string]: unknown;
 };
 
@@ -141,8 +126,14 @@ function findCustomFieldValue(
    */
   const normalizedRequestedKey = normalizeBadgeFieldKey(requestedKey);
 
+  const equivalentKeys =
+    normalizedRequestedKey === "company" || normalizedRequestedKey === "companyname"
+      ? ["company", "companyname"]
+      : normalizedRequestedKey === "jobtitle" || normalizedRequestedKey === "position"
+        ? ["jobtitle", "position"]
+        : [normalizedRequestedKey];
   const matchingKey = Object.keys(customFields).find((customFieldKey) => {
-    return normalizeBadgeFieldKey(customFieldKey) === normalizedRequestedKey;
+    return equivalentKeys.includes(normalizeBadgeFieldKey(customFieldKey));
   });
 
   return matchingKey ? customFields[matchingKey] : undefined;
@@ -182,6 +173,16 @@ function getTemplateLayout(
   return Object.fromEntries(
     directFields.map(([key, value]) => [key, value as BadgeFieldLayout]),
   );
+}
+
+function getTemplateGroups(
+  layout: Record<string, unknown> | null | undefined,
+): BadgeAutoLayoutGroup[] {
+  if (!layout) {
+    return [];
+  }
+
+  return normalizeBadgeAutoLayoutGroups((layout as BadgeLayoutRecord).groups);
 }
 
 function getQrImageUrl(data: StaffVisitorBadgeResponse | null) {
@@ -235,7 +236,11 @@ function getFieldValue(
 
   const resolvedFieldValue = fromResolvedFields?.value;
 
-  if (hasBadgeValue(resolvedFieldValue)) {
+  // For legacy badge responses, prefer a current registration custom value
+  // over an old fixed companyName/jobTitle/email value.
+  const resolvedIsLegacy = ["email", "company", "companyname", "jobtitle", "position"]
+    .includes(normalizeBadgeFieldKey(key));
+  if (hasBadgeValue(resolvedFieldValue) && !resolvedIsLegacy) {
     return resolvedFieldValue;
   }
 
@@ -313,6 +318,9 @@ function getFieldValue(
 
   if (hasBadgeValue(customFieldValue)) {
     return customFieldValue;
+  }
+  if (hasBadgeValue(resolvedFieldValue)) {
+    return resolvedFieldValue;
   }
 
   /*
@@ -419,23 +427,11 @@ function normalizeNumber(value: unknown, fallback: number) {
 }
 
 function getTextAlignment(layout: BadgeFieldLayout) {
-  return layout.textAlign === "left" ||
-    layout.textAlign === "center" ||
-    layout.textAlign === "right"
-    ? layout.textAlign
-    : "right";
+  return normalizeBadgeHorizontalAlign(layout.textAlign);
 }
 
-function getJustifyContent(textAlign: "left" | "center" | "right") {
-  if (textAlign === "left") {
-    return "flex-start";
-  }
-
-  if (textAlign === "center") {
-    return "center";
-  }
-
-  return "flex-end";
+function getVerticalAlignment(layout: BadgeFieldLayout) {
+  return normalizeBadgeVerticalAlign(layout.verticalAlign);
 }
 
 function getFieldMaxLines(_fieldKey: string, layout: BadgeFieldLayout): number {
@@ -531,6 +527,8 @@ export function StaffBadgePreviewModal({
   const qrImageUrl = getQrImageUrl(data);
 
   const layoutFields = getTemplateLayout(template?.layout);
+  const autoLayoutGroups = getTemplateGroups(template?.layout);
+  const groupedFieldKeys = getGroupedBadgeFieldKeys(autoLayoutGroups);
 
   const selectedFieldKeys = getSelectedFieldKeys(
     template?.selectedFields,
@@ -801,6 +799,77 @@ export function StaffBadgePreviewModal({
     }
   }
 
+  function renderBadgeTextField({
+    fieldKey,
+    layout,
+    left,
+    top,
+    width,
+    height,
+    reactKey,
+    textAlignOverride,
+  }: {
+    fieldKey: string;
+    layout: BadgeFieldLayout;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    reactKey: string;
+    textAlignOverride?: "left" | "center" | "right";
+  }) {
+    const fontSize =
+      normalizeNumber(layout.fontSize, 14) * previewScale * 0.3528;
+
+    const maxLines = getFieldMaxLines(fieldKey, layout);
+    const lineHeight = getFieldLineHeight(fieldKey, layout);
+
+    const minimumFontSize = Math.min(
+      fontSize,
+      Math.max(1, Math.min(fontSize * 0.42, height / Math.max(1, maxLines))),
+    );
+
+    const bold =
+      layout.bold === true ||
+      layout.fontWeight === "bold" ||
+      Number(layout.fontWeight) >= 700;
+
+    const fieldTextColor =
+      (bold ? layout.boldColor : layout.textColor) ||
+      layout.textColor ||
+      textColor;
+
+    const value = getFieldValue(fieldKey, data, visitor, qrImageUrl);
+    const formattedValue = formatCustomValue(value);
+    const textAlign = textAlignOverride ?? getTextAlignment(layout);
+    const verticalAlign = getVerticalAlignment(layout);
+    const direction = resolveBadgeTextDirection(formattedValue, layout.textDirection);
+
+    return (
+      <AutoFitBadgeText
+        key={reactKey}
+        text={formattedValue}
+        maxFontSize={fontSize}
+        minFontSize={minimumFontSize}
+        maxLines={maxLines}
+        lineHeight={lineHeight}
+        className="absolute z-10"
+        style={{
+          left,
+          top,
+          width,
+          height,
+          paddingInline: Math.max(2, previewScale * 0.65),
+          color: fieldTextColor,
+          fontWeight: bold ? 900 : layout.fontWeight || 700,
+          textAlign,
+          alignItems: badgeVerticalAlignToFlex(verticalAlign),
+          direction,
+        }}
+      />
+    );
+  }
+
   return (
     <Modal
       open={open}
@@ -863,6 +932,67 @@ export function StaffBadgePreviewModal({
                 backgroundRepeat: "no-repeat",
               }}
             >
+              {autoLayoutGroups.map((group) => {
+                const activeFieldKeys = group.fieldKeys.filter((fieldKey) => {
+                  if (
+                    isQrField(fieldKey) ||
+                    !selectedFieldKeys.includes(fieldKey) ||
+                    !layoutFields[fieldKey]
+                  ) {
+                    return false;
+                  }
+
+                  if (group.collapseEmpty === false) {
+                    return true;
+                  }
+
+                  return hasBadgeValue(
+                    getFieldValue(fieldKey, data, visitor, qrImageUrl),
+                  );
+                });
+
+                if (activeFieldKeys.length === 0) {
+                  return null;
+                }
+
+                const items = computeBadgeAutoLayoutItems({
+                  group,
+                  fieldKeys: activeFieldKeys,
+                  getHeightMm: (fieldKey) =>
+                    normalizeNumber(
+                      layoutFields[fieldKey]?.height,
+                      fieldKey === "fullName" ? 13 : 10,
+                    ),
+                });
+
+                const textAlign = normalizeBadgeHorizontalAlign(
+                  group.horizontalAlign,
+                );
+
+                return (
+                  <div key={group.id}>
+                    {items.map((item) => {
+                      const layout = layoutFields[item.fieldKey];
+
+                      if (!layout) {
+                        return null;
+                      }
+
+                      return renderBadgeTextField({
+                        fieldKey: item.fieldKey,
+                        layout,
+                        left: group.x * previewScale,
+                        top: item.yMm * previewScale,
+                        width: group.width * previewScale,
+                        height: item.heightMm * previewScale,
+                        reactKey: `${group.id}-${item.fieldKey}`,
+                        textAlignOverride: textAlign,
+                      });
+                    })}
+                  </div>
+                );
+              })}
+
               {selectedFieldKeys.map((fieldKey) => {
                 const layout = layoutFields[fieldKey];
 
@@ -870,10 +1000,12 @@ export function StaffBadgePreviewModal({
                   return null;
                 }
 
+                if (!isQrField(fieldKey) && groupedFieldKeys.has(fieldKey)) {
+                  return null;
+                }
+
                 const x = normalizeNumber(layout.x, 10) * previewScale;
-
                 const y = normalizeNumber(layout.y, 10) * previewScale;
-
                 const width =
                   normalizeNumber(layout.width, isQrField(fieldKey) ? 26 : 70) *
                   previewScale;
@@ -889,10 +1021,8 @@ export function StaffBadgePreviewModal({
                       style={{
                         left: x,
                         top: y,
-
                         width,
                         height,
-
                         padding: Math.max(1, previewScale),
                       }}
                     >
@@ -912,94 +1042,20 @@ export function StaffBadgePreviewModal({
                   );
                 }
 
-                const isFullName = fieldKey === "fullName";
-
-                /*
-                 * fontSize في القالب يعتبر Point تقريبًا.
-                 *
-                 * 1pt = 0.3528mm
-                 * ثم نحوله إلى بكسل المعاينة باستخدام previewScale.
-                 */
-                const fontSize =
-                  normalizeNumber(layout.fontSize, 14) * previewScale * 0.3528;
-
-                /*
-                 * نعطي جميع الحقول النصية مساحة مناسبة للاحتواء.
-                 *
-                 * عندما يكون layout.height محفوظًا في القالب،
-                 * تبقى القيمة المحفوظة هي المستخدمة.
-                 */
                 const heightMm = normalizeNumber(
                   layout.height,
-                  isFullName ? 13 : 10,
+                  fieldKey === "fullName" ? 13 : 10,
                 );
 
-                const height = heightMm * previewScale;
-
-                const maxLines = getFieldMaxLines(fieldKey, layout);
-
-                const lineHeight = getFieldLineHeight(fieldKey, layout);
-
-                /*
-                 * جميع الحقول، وليس الاسم فقط، يمكنها التصغير
-                 * تلقائيًا حتى تظهر القيمة كاملة داخل المساحة.
-                 */
-                const minimumFontSize = Math.min(
-                  fontSize,
-                  Math.max(5 * previewScale * 0.3528, fontSize * 0.42),
-                );
-
-                const bold =
-                  layout.bold === true ||
-                  layout.fontWeight === "bold" ||
-                  Number(layout.fontWeight) >= 700;
-
-                const fieldTextColor =
-                  (bold ? layout.boldColor : layout.textColor) ||
-                  layout.textColor ||
-                  textColor;
-
-                const value = getFieldValue(
+                return renderBadgeTextField({
                   fieldKey,
-                  data,
-                  visitor,
-                  qrImageUrl,
-                );
-
-                const formattedValue = formatCustomValue(value);
-
-                const textAlign = getTextAlignment(layout);
-
-                return (
-                  <AutoFitBadgeText
-                    key={fieldKey}
-                    text={formattedValue}
-                    maxFontSize={fontSize}
-                    minFontSize={minimumFontSize}
-                    maxLines={maxLines}
-                    lineHeight={lineHeight}
-                    className="absolute z-10"
-                    style={{
-                      left: x,
-                      top: y,
-
-                      width,
-                      height,
-
-                      paddingInline: Math.max(2, previewScale * 0.65),
-
-                      color: fieldTextColor,
-
-                      fontWeight: bold ? 900 : layout.fontWeight || 700,
-
-                      textAlign,
-
-                      justifyContent: getJustifyContent(textAlign),
-
-                      direction: "rtl",
-                    }}
-                  />
-                );
+                  layout,
+                  left: x,
+                  top: y,
+                  width,
+                  height: heightMm * previewScale,
+                  reactKey: fieldKey,
+                });
               })}
             </div>
           </div>

@@ -6,6 +6,7 @@ import {
   cancelRegistration,
   createRegistration,
   deleteRegistration,
+  exportRegistrations,
   getRegistrations,
   updateRegistration,
 } from "./registrations.api";
@@ -52,6 +53,23 @@ function getErrorMessage(error: unknown) {
   }
 
   return "حدث خطأ غير متوقع";
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.style.display = "none";
+
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+
+  window.setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+  }, 1_000);
 }
 
 function updateRegistrationInLists(
@@ -239,6 +257,27 @@ export function useBlockRegistration() {
       }
 
       invalidateRegistrations(queryClient);
+    },
+
+    onError: (error) => {
+      toast.error(getErrorMessage(error));
+    },
+  });
+}
+
+export function useExportRegistrations() {
+  return useMutation({
+    mutationFn: (params: RegistrationsListParams) =>
+      exportRegistrations(params),
+
+    onSuccess: (result) => {
+      if (!result) {
+        toast.info("لا توجد تسجيلات مطابقة للتصدير");
+        return;
+      }
+
+      downloadBlob(result.blob, result.filename);
+      toast.success("تم تجهيز ملف Excel بنجاح");
     },
 
     onError: (error) => {

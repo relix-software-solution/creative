@@ -160,7 +160,6 @@ export function AutoFitBadgeText({
         display: "flex",
         alignItems: "center",
         overflow: "hidden",
-        direction: "rtl",
         ...style,
       }}
     >
@@ -186,7 +185,7 @@ export function AutoFitBadgeText({
 
           textAlign: "inherit",
           direction: "inherit",
-          unicodeBidi: "plaintext",
+          unicodeBidi: "isolate",
         }}
       >
         {text}

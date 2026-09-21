@@ -684,7 +684,7 @@ export default function PublicRegistrationSuccessPage() {
                   </div>
                 ) : null}
 
-                <div
+                {/* <div
                   className="mt-5 border border-emerald-400/20 bg-emerald-500/10 p-5"
                   style={radiusLg}
                 >
@@ -726,7 +726,7 @@ export default function PublicRegistrationSuccessPage() {
                       تعذر إنشاء رابط WhatsApp.
                     </div>
                   )}
-                </div>
+                </div> */}
               </section>
 
               <aside className="w-full lg:col-start-1 lg:row-start-1">
@@ -792,7 +792,7 @@ export default function PublicRegistrationSuccessPage() {
                       className="mt-5 border border-amber-300/25 bg-amber-400/10 p-4 text-center text-sm font-bold leading-7 text-amber-100"
                       style={radiusMd}
                     >
-                      لم يرجع الباك رابط صورة بطاقة الدخول.
+                      تعذر تحميل البطاقة
                     </div>
                   ) : null}
 
