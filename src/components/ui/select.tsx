@@ -1,7 +1,13 @@
 "use client";
 
 import { Check, ChevronDown } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  CSSProperties,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils/cn";
 
@@ -18,14 +24,21 @@ type SelectProps = {
   options: SelectOption[];
   error?: string;
   disabled?: boolean;
+  required?: boolean;
   onChange: (value: string) => void;
   className?: string;
+  accentColor?: string;
+  textColor?: string;
+  borderRadius?: string;
+  triggerStyle?: CSSProperties;
 };
 
 type DropdownPosition = {
-  top: number;
+  top?: number;
+  bottom?: number;
   left: number;
   width: number;
+  maxHeight: number;
 };
 
 export function Select({
@@ -35,8 +48,13 @@ export function Select({
   options,
   error,
   disabled = false,
+  required = false,
   onChange,
   className,
+  accentColor = "#A88042",
+  textColor = "#4B4B4B",
+  borderRadius = "1rem",
+  triggerStyle,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -44,6 +62,7 @@ export function Select({
     top: 0,
     left: 0,
     width: 0,
+    maxHeight: 256,
   });
 
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -66,11 +85,36 @@ export function Select({
     if (!button) return;
 
     const rect = button.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const edgeGap = 8;
+    const dropdownGap = 8;
+    const preferredHeight = 256;
+    const minimumUsefulHeight = 160;
+    const spaceBelow = Math.max(0, viewportHeight - rect.bottom - edgeGap);
+    const spaceAbove = Math.max(0, rect.top - edgeGap);
+    const openBelow =
+      spaceBelow >= minimumUsefulHeight || spaceBelow >= spaceAbove;
+    const availableHeight = openBelow ? spaceBelow : spaceAbove;
+    const width = Math.min(rect.width, Math.max(0, viewportWidth - edgeGap * 2));
+    const left = Math.min(
+      Math.max(edgeGap, rect.left),
+      Math.max(edgeGap, viewportWidth - width - edgeGap),
+    );
 
     setPosition({
-      top: rect.bottom + 8,
-      left: rect.left,
-      width: rect.width,
+      ...(openBelow
+        ? { top: rect.bottom + dropdownGap, bottom: undefined }
+        : {
+            top: undefined,
+            bottom: viewportHeight - rect.top + dropdownGap,
+          }),
+      left,
+      width,
+      maxHeight: Math.max(
+        96,
+        Math.min(preferredHeight, availableHeight - dropdownGap),
+      ),
     });
   }
 
@@ -129,15 +173,22 @@ export function Select({
       ? createPortal(
           <div
             ref={dropdownRef}
+            role="listbox"
             style={{
               top: position.top,
+              bottom: position.bottom,
               left: position.left,
               width: position.width,
+              maxHeight: position.maxHeight,
               zIndex: 999999,
+              borderRadius,
             }}
-            className="fixed overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_24px_70px_rgba(0,0,0,0.14)]"
+            className="fixed overflow-hidden border border-black/10 bg-white shadow-[0_24px_70px_rgba(0,0,0,0.14)]"
           >
-            <div className="custom-scrollbar max-h-64 overflow-y-auto p-2">
+            <div
+              className="custom-scrollbar overflow-y-auto p-2"
+              style={{ maxHeight: position.maxHeight }}
+            >
               {options.map((option) => {
                 const isSelected = option.value === value;
 
@@ -145,16 +196,21 @@ export function Select({
                   <button
                     key={option.value || option.label}
                     type="button"
+                    role="option"
+                    aria-selected={isSelected}
                     disabled={option.disabled}
                     onClick={() => handleSelect(option)}
+                    style={{
+                      backgroundColor: isSelected ? accentColor : undefined,
+                      color: isSelected ? "#FFFFFF" : textColor,
+                      borderRadius: `min(${borderRadius}, 0.75rem)`,
+                    }}
                     className={cn(
-                      "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-right text-sm font-extrabold transition",
-                      isSelected
-                        ? "bg-[#A88042] text-white"
-                        : "text-[#4B4B4B] hover:bg-[#A88042]/8 hover:text-[#A88042]",
-                      option.disabled
-                        ? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-[#4B4B4B]"
+                      "flex w-full items-center justify-between gap-3 px-3 py-3 text-right text-sm font-extrabold transition",
+                      !isSelected && !option.disabled
+                        ? "hover:bg-black/[0.04]"
                         : "",
+                      option.disabled ? "cursor-not-allowed opacity-45" : "",
                     )}
                   >
                     <span className="truncate">{option.label}</span>
@@ -179,36 +235,44 @@ export function Select({
         ref={buttonRef}
         type="button"
         disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-invalid={Boolean(error)}
+        aria-required={required}
         onClick={() => {
           if (disabled) return;
 
           updatePosition();
           setOpen((value) => !value);
         }}
+        style={{
+          borderRadius,
+          color: textColor,
+          borderColor: error
+            ? "#F87171"
+            : open
+              ? accentColor
+              : triggerStyle?.borderColor,
+          boxShadow:
+            open && !error ? `0 0 0 4px ${accentColor}1A` : undefined,
+          ...triggerStyle,
+        }}
         className={cn(
-          "flex h-12 w-full items-center justify-between gap-3 rounded-2xl border bg-white px-4 text-sm font-extrabold outline-none transition",
-          "focus:border-[#A88042] focus:ring-4 focus:ring-[#A88042]/10",
+          "flex h-12 w-full items-center justify-between gap-3 border bg-white px-4 text-sm font-extrabold outline-none transition",
           disabled
-            ? "cursor-not-allowed border-black/10 bg-black/[0.03] text-[#4B4B4B]/40"
-            : "border-black/10 text-[#4B4B4B] hover:border-[#A88042]/50",
-          open && !error ? "border-[#A88042] ring-4 ring-[#A88042]/10" : "",
-          error
-            ? "border-red-400 focus:border-red-500 focus:ring-red-500/10"
-            : "",
+            ? "cursor-not-allowed border-black/10 bg-black/[0.03] opacity-45"
+            : "border-black/10 hover:border-black/20",
+          error ? "border-red-400" : "",
         )}
       >
-        <span
-          className={cn(
-            "truncate",
-            selectedOption ? "text-[#4B4B4B]" : "text-[#4B4B4B]/38",
-          )}
-        >
+        <span className={cn("truncate", selectedOption ? "" : "opacity-40")}>
           {selectedOption?.label ?? placeholder}
         </span>
 
         <ChevronDown
+          style={{ color: accentColor }}
           className={cn(
-            "h-5 w-5 shrink-0 text-[#A88042] transition",
+            "h-5 w-5 shrink-0 transition",
             open ? "rotate-180" : "",
           )}
         />

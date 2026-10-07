@@ -65,8 +65,9 @@ export type CreateRegistrationFieldPayload = {
   sortOrder: number;
 };
 
-export type UpdateRegistrationFieldPayload =
-  Partial<CreateRegistrationFieldPayload>;
+export type UpdateRegistrationFieldPayload = Partial<
+  Omit<CreateRegistrationFieldPayload, "eventId">
+>;
 
 export type RegistrationFieldsListResponse = {
   items: RegistrationField[];

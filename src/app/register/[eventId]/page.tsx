@@ -42,6 +42,7 @@ import {
   getPublicRegistrationStorageKey,
   normalizePublicRegistrationSuccess,
 } from "@/features/public-events/public-registration-result";
+import { Select } from "@/components/ui/select";
 
 type BaseFormState = {
   fullName: string;
@@ -857,33 +858,29 @@ export default function RegisterPage() {
     }
 
     if (field.type === "SELECT") {
+      const selectOptions = (field.options ?? []).map((option) => ({
+        value: getOptionValue(option),
+        label: getOptionLabel(option),
+      }));
+
       return (
         <div key={field.id} className="space-y-2">
           {commonLabel}
 
-          <select
+          <Select
             value={String(value ?? "")}
             required={field.isRequired}
-            onChange={(changeEvent) =>
-              updateFieldValue(field.key, changeEvent.target.value)
-            }
-            className={`${inputClass} h-12`}
-            style={getInputStyle(theme, Boolean(fieldError))}
-          >
-            <option value="">اختر</option>
-
-            {(field.options ?? []).map((option) => {
-              const optionValue = getOptionValue(option);
-
-              return (
-                <option key={optionValue} value={optionValue}>
-                  {getOptionLabel(option)}
-                </option>
-              );
-            })}
-          </select>
-
-          {renderError(field.key)}
+            placeholder={field.placeholderAr || "اختر"}
+            options={selectOptions}
+            error={fieldError}
+            onChange={(nextValue) => updateFieldValue(field.key, nextValue)}
+            accentColor={theme.primary}
+            textColor={theme.text}
+            borderRadius={theme.radius}
+            triggerStyle={{
+              backgroundColor: "rgba(255,255,255,0.80)",
+            }}
+          />
         </div>
       );
     }

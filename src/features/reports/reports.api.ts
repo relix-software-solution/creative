@@ -70,3 +70,21 @@ export async function getStaffPerformanceReport(eventId: string) {
 
   return normalizeList<ReportStaffPerformanceItem>(response.data);
 }
+
+export async function downloadEventReportExcel(
+  eventId: string,
+  params: ReportDateRangeParams = {},
+) {
+  const response = await adminClient.get(`/reports/events/${eventId}/export`, {
+    params,
+    responseType: "blob",
+  });
+
+  const disposition = response.headers["content-disposition"] as string | undefined;
+  const filenameMatch = disposition?.match(/filename="?([^";]+)"?/i);
+
+  return {
+    blob: response.data as Blob,
+    filename: filenameMatch?.[1] ?? `event-report-${eventId}.xlsx`,
+  };
+}

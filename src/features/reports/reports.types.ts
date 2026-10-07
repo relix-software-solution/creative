@@ -3,73 +3,83 @@ export type ReportDateRangeParams = {
   to?: string;
 };
 
-export type EventReportParams = ReportDateRangeParams & {
-  eventId: string;
-};
-
 export type ReportOverview = {
-  totalRegistrations?: number;
-  activeRegistrations?: number;
-  cancelledRegistrations?: number;
-  blockedRegistrations?: number;
-  totalScans?: number;
-  totalMovements?: number;
-  activeStaffSessions?: number;
-  uniqueAttendees?: number;
-  [key: string]: unknown;
+  event: {
+    id: string;
+    titleAr: string;
+    titleEn?: string | null;
+    status?: string | null;
+    startsAt: string;
+    endsAt: string;
+  };
+  registrations: {
+    total: number;
+    active: number;
+    cancelled: number;
+    blocked: number;
+    archived: number;
+  };
+  movements: {
+    total: number;
+    allowed: number;
+    denied: number;
+    warnings: number;
+    entries: number;
+    exits: number;
+  };
+  attendance: {
+    uniqueCheckedIn: number;
+    currentInside?: number;
+    currentInsideApprox?: number;
+    attendanceRate: number;
+  };
+  qr: {
+    totalGenerated: number;
+    active: number;
+    revoked: number;
+    expired: number;
+  };
 };
 
 export type ReportBreakdownItem = {
-  id?: string;
-  code?: string;
+  attendeeTypeId?: string;
+  attendeeTypeCode?: string;
+  attendeeTypeNameAr?: string;
+  attendeeTypeNameEn?: string | null;
   type?: string;
-  label?: string;
-  labelAr?: string;
-  labelEn?: string;
-  name?: string;
-  nameAr?: string;
-  nameEn?: string;
+  result?: string;
   count?: number;
   total?: number;
-  value?: number;
-  percentage?: number;
-  [key: string]: unknown;
+  active?: number;
+  cancelled?: number;
+  blocked?: number;
 };
 
 export type ReportHourItem = {
-  hour?: string;
-  date?: string;
-  label?: string;
-  count?: number;
-  total?: number;
-  value?: number;
-  [key: string]: unknown;
+  hour: string;
+  total: number;
+  allowed: number;
+  denied: number;
 };
 
 export type ReportCheckpointItem = {
-  id?: string;
-  checkpointId?: string;
-  checkpointName?: string;
-  nameAr?: string;
-  nameEn?: string;
-  code?: string;
-  scans?: number;
-  movements?: number;
-  entries?: number;
-  exits?: number;
-  total?: number;
-  [key: string]: unknown;
+  checkpointId: string;
+  checkpointCode?: string | null;
+  checkpointNameAr: string;
+  checkpointNameEn?: string | null;
+  totalMovements: number;
+  allowed: number;
+  denied: number;
+  entries: number;
+  exits: number;
 };
 
 export type ReportStaffPerformanceItem = {
-  id?: string;
-  staffUserId?: string;
-  userId?: string;
-  fullName?: string;
-  email?: string;
-  scans?: number;
-  movements?: number;
-  sessions?: number;
-  total?: number;
-  [key: string]: unknown;
+  staffUserId: string;
+  fullName: string;
+  totalMovements: number;
+  allowed: number;
+  denied: number;
+  activeSessionsCount: number;
+  lastSeenAt?: string | null;
 };

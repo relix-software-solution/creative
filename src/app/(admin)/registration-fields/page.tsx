@@ -313,10 +313,12 @@ export default function RegistrationFieldsPage() {
     const payload = normalizePayload(pendingValues);
 
     if (pendingAction === "update" && selectedField) {
+      const { eventId: _eventId, ...updatePayload } = payload;
+
       updateFieldMutation.mutate(
         {
           id: selectedField.id,
-          payload,
+          payload: updatePayload,
         },
         {
           onSuccess: () => {
@@ -733,6 +735,7 @@ export default function RegistrationFieldsPage() {
             className="lg:col-span-2"
             value={form.watch("eventId")}
             placeholder="اختر الفعالية"
+            disabled={Boolean(selectedField) || isSubmitting}
             error={form.formState.errors.eventId?.message}
             onChange={(value) => {
               form.setValue("eventId", value, {
