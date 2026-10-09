@@ -1,12 +1,17 @@
 import { adminClient } from "@/lib/api/admin-client";
 import { unwrapApiData } from "@/lib/api/unwrap-api-data";
 import {
+  ScanTrackingFiltersResponse,
   ScanTrackingItem,
   ScanTrackingListParams,
   ScanTrackingListResponse,
+  VisitorScanTrackingDetail,
+  VisitorScanTrackingParams,
+  VisitorScanTrackingResponse,
 } from "./scan-tracking.types";
 
-const SCAN_TRACKING_ENDPOINT = "/scans/raw";
+const LEGACY_SCAN_TRACKING_ENDPOINT = "/scans/raw";
+const VISITOR_SCAN_TRACKING_ENDPOINT = "/scan-tracking/visitors";
 
 function toIsoDate(value?: string) {
   if (!value) return undefined;
@@ -38,7 +43,6 @@ function normalizeItems(value: unknown): ScanTrackingItem[] {
     if (Array.isArray(objectValue.scans)) return objectValue.scans;
     if (Array.isArray(objectValue.scanEvents)) return objectValue.scanEvents;
     if (Array.isArray(objectValue.rawScans)) return objectValue.rawScans;
-
     if (Array.isArray(objectValue.data)) return objectValue.data;
 
     if (
@@ -121,8 +125,41 @@ function normalizeScansList(data: unknown): ScanTrackingListResponse {
   };
 }
 
+function visitorParams(params: VisitorScanTrackingParams = {}) {
+  return {
+    page: params.page ?? 1,
+    limit: params.limit ?? 25,
+    search: params.search?.trim() || undefined,
+    eventId: params.eventId?.trim() || undefined,
+    attendeeTypeId: params.attendeeTypeId?.trim() || undefined,
+    type: params.type?.trim() || undefined,
+    result: params.result?.trim() || undefined,
+    state: params.state?.trim() || undefined,
+    from: toIsoDate(params.from),
+    to: toIsoDate(params.to),
+  };
+}
+
+function parseFilename(contentDisposition?: string) {
+  if (!contentDisposition) return "visitor-tracking.xlsx";
+
+  const encoded = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+
+  return (
+    contentDisposition.match(/filename="?([^";]+)"?/i)?.[1] ??
+    "visitor-tracking.xlsx"
+  );
+}
+
 export async function getScanTrackingList(params: ScanTrackingListParams = {}) {
-  const response = await adminClient.get(SCAN_TRACKING_ENDPOINT, {
+  const response = await adminClient.get(LEGACY_SCAN_TRACKING_ENDPOINT, {
     params: {
       page: params.page ?? 1,
       limit: params.limit ?? 20,
@@ -140,4 +177,51 @@ export async function getScanTrackingList(params: ScanTrackingListParams = {}) {
   });
 
   return normalizeScansList(response.data);
+}
+
+export async function getVisitorScanTracking(
+  params: VisitorScanTrackingParams = {},
+) {
+  const response = await adminClient.get(VISITOR_SCAN_TRACKING_ENDPOINT, {
+    params: visitorParams(params),
+  });
+
+  return unwrapApiData<VisitorScanTrackingResponse>(response.data);
+}
+
+export async function getVisitorScanTrackingDetail(
+  registrationId: string,
+  params: VisitorScanTrackingParams = {},
+) {
+  const response = await adminClient.get(
+    `${VISITOR_SCAN_TRACKING_ENDPOINT}/${registrationId}`,
+    {
+      params: visitorParams({ ...params, page: undefined, limit: undefined }),
+    },
+  );
+
+  return unwrapApiData<VisitorScanTrackingDetail>(response.data);
+}
+
+export async function getScanTrackingFilters() {
+  const response = await adminClient.get("/scan-tracking/filters");
+
+  return unwrapApiData<ScanTrackingFiltersResponse>(response.data);
+}
+
+export async function exportVisitorScanTracking(
+  params: VisitorScanTrackingParams = {},
+) {
+  const response = await adminClient.get(
+    `${VISITOR_SCAN_TRACKING_ENDPOINT}/export`,
+    {
+      params: visitorParams({ ...params, page: undefined, limit: undefined }),
+      responseType: "blob",
+    },
+  );
+
+  return {
+    blob: response.data as Blob,
+    filename: parseFilename(response.headers["content-disposition"]),
+  };
 }

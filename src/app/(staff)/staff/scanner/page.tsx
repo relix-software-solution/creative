@@ -1985,7 +1985,9 @@ export default function StaffScannerPage() {
   async function submitPayload(
     originalPayload: CreateScanPayload,
     knownVisitor?: StaffVisitor | null,
+    options?: { autoReveal?: boolean },
   ) {
+    const autoReveal = options?.autoReveal !== false;
     const cachedVisitor =
       knownVisitor ??
       (await findCachedStaffVisitorByQr(
@@ -2019,7 +2021,9 @@ export default function StaffScannerPage() {
 
       setLastOfflineSaved(false);
 
-      revealVisitorResult();
+      if (autoReveal) {
+        revealVisitorResult();
+      }
     }
 
     const onlineNow =
@@ -2111,7 +2115,9 @@ export default function StaffScannerPage() {
       setVisitorSource("scan");
       setLastOfflineSaved(false);
 
-      revealVisitorResult();
+      if (autoReveal) {
+        revealVisitorResult();
+      }
 
       releaseScanProcessingLock();
 
@@ -2162,7 +2168,9 @@ export default function StaffScannerPage() {
           setVisitorSource("offline-scan");
           setLastOfflineSaved(false);
 
-          revealVisitorResult();
+          if (autoReveal) {
+            revealVisitorResult();
+          }
 
           toast.warning(
             networkFailure
@@ -2333,7 +2341,10 @@ export default function StaffScannerPage() {
     }
   }
 
-  async function handleDecodedQr(decodedText: string) {
+  async function handleDecodedQr(
+    decodedText: string,
+    options?: { keepViewport?: boolean },
+  ) {
     const token = extractQrToken(decodedText);
 
     if (!token) return;
@@ -2345,7 +2356,9 @@ export default function StaffScannerPage() {
     }
 
     await stopCamera();
-    await submitPayload(buildPayload(token));
+    await submitPayload(buildPayload(token), undefined, {
+      autoReveal: !options?.keepViewport,
+    });
   }
 
   async function syncVisitorChangesFromServer(options?: {
@@ -3833,7 +3846,7 @@ export default function StaffScannerPage() {
 
           if (!text) return;
 
-          handleDecodedQr(text);
+          handleDecodedQr(text, { keepViewport: true });
         },
       );
 
