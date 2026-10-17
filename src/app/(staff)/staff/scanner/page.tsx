@@ -669,7 +669,7 @@ export default function StaffScannerPage() {
       if (pendingCount > 0 && navigator.onLine) {
         scheduleQueueSync(0);
       }
-    }, 10_000);
+    }, 30_000);
 
     if (pendingCount > 0 && navigator.onLine) {
       scheduleQueueSync(500);
@@ -1506,56 +1506,59 @@ export default function StaffScannerPage() {
 
     let syncContext = activeContext;
 
-    try {
-      /*
-       * لا نجدد الجلسة قسرًا قبل كل جولة مزامنة.
-       * هذا كان يسبب POST /start-my-session بشكل متكرر عند أي Queue event.
-       * نستخدم الجلسة الحالية، والتجديد القسري يبقى فقط لمسار stale-session
-       * الحقيقي عند رفض السيرفر للجلسة.
-       */
-      const renewedSession = await ensureActiveScannerSession({
-        force: false,
-      });
+    /*
+     * لا نبدأ/نجدد Staff Session مع كل دورة Queue.
+     * إذا الصفحة تملك staffSessionId صالحًا نستخدمه كما هو. هذا يمنع
+     * POST /start-my-session من التحول إلى heartbeat كل 10/30 ثانية.
+     * إنشاء جلسة جديدة يبقى فقط عند فتح الصفحة لأول مرة، أو عند مسار
+     * stale-session الحقيقي الخاص بعملية Scan مباشرة.
+     */
+    if (!syncContext.staffSessionId) {
+      try {
+        const renewedSession = await ensureActiveScannerSession({
+          force: false,
+        });
 
-      const renewedSessionRecord = renewedSession as Record<string, unknown>;
+        const renewedSessionRecord = renewedSession as Record<string, unknown>;
 
-      const renewedDeviceLabel =
-        [
-          renewedSessionRecord.deviceLabel,
-          renewedSessionRecord.deviceName,
-          renewedSessionRecord.deviceCode,
-        ]
-          .find(
-            (value): value is string =>
-              typeof value === "string" && value.trim().length > 0,
-          )
-          ?.trim() || renewedSession.deviceId;
+        const renewedDeviceLabel =
+          [
+            renewedSessionRecord.deviceLabel,
+            renewedSessionRecord.deviceName,
+            renewedSessionRecord.deviceCode,
+          ]
+            .find(
+              (value): value is string =>
+                typeof value === "string" && value.trim().length > 0,
+            )
+            ?.trim() || renewedSession.deviceId;
 
-      syncContext = {
-        eventId: renewedSession.eventId,
-        checkpointId: renewedSession.checkpointId,
-        deviceId: renewedSession.deviceId,
-        staffSessionId: renewedSession.staffSessionId,
+        syncContext = {
+          eventId: renewedSession.eventId,
+          checkpointId: renewedSession.checkpointId,
+          deviceId: renewedSession.deviceId,
+          staffSessionId: renewedSession.staffSessionId,
 
-        eventTitle: renewedSession.eventTitle,
-        checkpointName: renewedSession.checkpointName,
-        checkpointType: renewedSession.checkpointType ?? null,
+          eventTitle: renewedSession.eventTitle,
+          checkpointName: renewedSession.checkpointName,
+          checkpointType: renewedSession.checkpointType ?? null,
 
-        deviceLabel: renewedDeviceLabel,
-      };
-    } catch (error) {
-      console.warn("Could not renew scanner session before sync:", error);
+          deviceLabel: renewedDeviceLabel,
+        };
+      } catch (error) {
+        console.warn("Could not prepare scanner session before sync:", error);
 
-      if (!silent) {
-        toast.error(
-          "تعذر تجهيز جلسة السكانر للمزامنة. ستتم المحاولة تلقائيًا.",
-          {
-            id: "staff-sync-session-renewal-failed",
-          },
-        );
+        if (!silent) {
+          toast.error(
+            "تعذر تجهيز جلسة السكانر للمزامنة. ستتم المحاولة تلقائيًا.",
+            {
+              id: "staff-sync-session-renewal-failed",
+            },
+          );
+        }
+
+        return;
       }
-
-      return;
     }
 
     if (

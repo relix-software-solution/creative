@@ -3760,6 +3760,13 @@ export async function syncQueuedStaffVisitorUpdates(options: {
         continue;
       }
 
+      const previousErrorCode = queued.errorCode;
+      const previousErrorMessage = queued.errorMessage;
+      const wasConflict = isRecoverableVisitorUpdateConflict(
+        previousErrorCode,
+        previousErrorMessage,
+      );
+
       const attemptAt = new Date().toISOString();
 
       await staffScannerDb.visitorUpdates.update(queued.id, {
@@ -3770,92 +3777,112 @@ export async function syncQueuedStaffVisitorUpdates(options: {
         errorMessage: null,
       });
 
-      let expectedUpdatedAt = queued.expectedUpdatedAt ?? null;
       let response: UpdateStaffVisitorResponse | null = null;
       let finalError: unknown = null;
-      let conflictRebaseCount = 0;
 
-      /*
-       * قد يكون الجهاز قديمًا بدقائق عن السيرفر (جوال/لابتوب آخر أو Delta
-       * لم يصل بعد). عند 409 لا نحول التعديل مباشرة إلى "تحتاج مراجعة".
-       * نقرأ النسخة الحالية من السيرفر، نعيد تطبيق الحقول التي عدّلها الموظف
-       * فقط، ثم نعيد PATCH على Revision الحالي. نسمح بمحاولتين لحماية السباق
-       * مع جهاز آخر يعدل في نفس اللحظة.
+      /**
+       * Merge the newest server row into IndexedDB, then re-apply only the
+       * locally edited fields. This never discards queued.changes.
        */
-      while (true) {
-        try {
-          response = await options.updateVisitor(queued.registrationId, {
-            ...queued.changes,
-            expectedUpdatedAt: expectedUpdatedAt ?? undefined,
-          });
-          break;
-        } catch (error) {
-          const classified = classifyQueueError(error);
-          const conflict =
-            classified.httpStatus === 409 ||
-            classified.code === "VISITOR_UPDATE_CONFLICT" ||
-            classified.code === "HTTP_409";
+      const refreshAndRebaseLocalVisitor = async () => {
+        if (!options.getVisitor) {
+          return null;
+        }
 
-          if (
-            !conflict ||
-            !options.getVisitor ||
-            conflictRebaseCount >= 2
-          ) {
-            finalError = error;
-            break;
-          }
+        const serverVisitor = await options.getVisitor(queued.registrationId);
+        const serverUpdatedAt = getVisitorUpdatedAt(serverVisitor);
+        const currentVisitor = await staffScannerDb.visitors.get(
+          queued.registrationId,
+        );
 
+        const normalizedServerVisitor = mergeCachedVisitorQrState(
+          normalizeCachedVisitor(
+            queued.eventId,
+            serverVisitor,
+            "CACHED",
+            currentVisitor?.snapshotId ?? null,
+          ),
+          currentVisitor,
+        );
+
+        const rebasedVisitor = mergeVisitorUpdate(
+          normalizedServerVisitor,
+          queued.changes,
+        );
+
+        rebasedVisitor.serverUpdatedAt = serverUpdatedAt;
+        rebasedVisitor.updatedAt = serverUpdatedAt;
+
+        await staffScannerDb.transaction(
+          "rw",
+          staffScannerDb.visitors,
+          staffScannerDb.visitorUpdates,
+          async () => {
+            await staffScannerDb.visitors.put(rebasedVisitor);
+            await staffScannerDb.visitorUpdates.update(queued.id!, {
+              expectedUpdatedAt: serverUpdatedAt,
+              status: "SYNCING",
+              retryable: true,
+              errorCode: null,
+              errorMessage: null,
+              updatedAt: new Date().toISOString(),
+            });
+          },
+        );
+
+        return serverUpdatedAt;
+      };
+
+      try {
+        if (wasConflict && options.getVisitor) {
+          /*
+           * Legacy rescue path:
+           * this operation already proved its base revision is stale. Fetch
+           * the latest row, preserve unrelated server fields, and apply the
+           * exact local patch WITHOUT expectedUpdatedAt. The backend treats
+           * expectedUpdatedAt as optional, so this is an atomic field-level
+           * merge instead of an endless 409 loop.
+           */
+          await refreshAndRebaseLocalVisitor();
+          response = await options.updateVisitor(
+            queued.registrationId,
+            { ...queued.changes },
+          );
+        } else {
           try {
-            const serverVisitor = await options.getVisitor(
+            response = await options.updateVisitor(queued.registrationId, {
+              ...queued.changes,
+              expectedUpdatedAt: queued.expectedUpdatedAt ?? undefined,
+            });
+          } catch (error) {
+            const classified = classifyQueueError(error);
+            const conflict =
+              classified.httpStatus === 409 ||
+              isRecoverableVisitorUpdateConflict(
+                classified.code,
+                classified.message,
+              );
+
+            if (!conflict || !options.getVisitor) {
+              throw error;
+            }
+
+            /*
+             * First conflict for a fresh edit: refresh the canonical server
+             * row and then merge only queued.changes without the stale
+             * revision token. This preserves every unrelated newer server
+             * value and makes the local staff edit win only for fields the
+             * employee actually changed.
+             */
+            await refreshAndRebaseLocalVisitor();
+            response = await options.updateVisitor(
               queued.registrationId,
+              { ...queued.changes },
             );
-            const serverUpdatedAt = getVisitorUpdatedAt(serverVisitor);
-            const currentVisitor = await staffScannerDb.visitors.get(
-              queued.registrationId,
-            );
-
-            const normalizedServerVisitor = mergeCachedVisitorQrState(
-              normalizeCachedVisitor(
-                queued.eventId,
-                serverVisitor,
-                "CACHED",
-                currentVisitor?.snapshotId ?? null,
-              ),
-              currentVisitor,
-            );
-
-            const rebasedVisitor = mergeVisitorUpdate(
-              normalizedServerVisitor,
-              queued.changes,
-            );
-
-            rebasedVisitor.serverUpdatedAt = serverUpdatedAt;
-            rebasedVisitor.updatedAt = serverUpdatedAt;
-
-            await staffScannerDb.transaction(
-              "rw",
-              staffScannerDb.visitors,
-              staffScannerDb.visitorUpdates,
-              async () => {
-                await staffScannerDb.visitors.put(rebasedVisitor);
-                await staffScannerDb.visitorUpdates.update(queued.id!, {
-                  expectedUpdatedAt: serverUpdatedAt,
-                  status: "SYNCING",
-                  retryable: true,
-                  errorCode: null,
-                  errorMessage: null,
-                  updatedAt: new Date().toISOString(),
-                });
-              },
-            );
-
-            expectedUpdatedAt = serverUpdatedAt;
-            conflictRebaseCount += 1;
-          } catch (refreshError) {
-            finalError = refreshError;
-            break;
           }
         }
+      } catch (error) {
+        finalError = error;
       }
 
       if (response) {
@@ -3914,17 +3941,16 @@ export async function syncQueuedStaffVisitorUpdates(options: {
       }
 
       const classified = classifyQueueError(finalError);
-      const conflict =
-        classified.httpStatus === 409 ||
-        classified.code === "VISITOR_UPDATE_CONFLICT" ||
-        classified.code === "HTTP_409";
 
       /*
-       * حتى لو حدث سباق متكرر جدًا وبقي 409 بعد محاولتي rebase، نبقيه
-       * retryable بدل PERMANENT_FAILED. المزامنة التالية ستقرأ Revision أحدث
-       * وتحاول مجددًا؛ لا نرمي تعديل المستخدم إلى "تحتاج مراجعة" بلا داعٍ.
+       * If a PATCH without expectedUpdatedAt still returns 409, it is no longer
+       * an optimistic-concurrency conflict. Treat it as a real validation/data
+       * conflict and stop auto-hammering the server. The local payload remains
+       * stored intact under PERMANENT_FAILED for manual review/export.
        */
-      const retryable = conflict ? true : classified.retryable;
+      const retryable = classified.httpStatus === 409
+        ? false
+        : classified.retryable;
 
       await staffScannerDb.transaction(
         "rw",
@@ -3934,7 +3960,7 @@ export async function syncQueuedStaffVisitorUpdates(options: {
           await staffScannerDb.visitorUpdates.update(queued.id!, {
             status: retryable ? "FAILED" : "PERMANENT_FAILED",
             retryable,
-            errorCode: conflict ? "VISITOR_UPDATE_CONFLICT" : classified.code,
+            errorCode: classified.code,
             errorMessage: classified.message,
             lastAttemptAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -3954,7 +3980,12 @@ export async function syncQueuedStaffVisitorUpdates(options: {
       }
     }
 
-    if (result.total > 0) {
+    /*
+     * Do not emit another queue-changed event for failed-only batches. That was
+     * creating immediate recursive retries. Successful updates may unblock
+     * dependent work, so only those wake the queue listener.
+     */
+    if (result.synced > 0) {
       notifyOfflineQueueChanged();
     }
 
@@ -4274,10 +4305,15 @@ export async function recoverRetryableOfflineFailures(): Promise<RecoverOfflineF
     ),
   );
 
-  const recoverableUpdates = updates.filter((update) =>
-    isRecoverableOfflineFailure(update.errorCode, update.errorMessage) ||
-    isRecoverableVisitorUpdateConflict(update.errorCode, update.errorMessage),
-  );
+  /*
+   * Visitor edits are partial field patches and their original `changes` payload
+   * remains stored locally. Re-queue every failed visitor edit so the rescue
+   * path can merge those exact local fields into the newest server copy.
+   *
+   * We intentionally do NOT do the same for offline registrations/scans: those
+   * may contain true duplicates/signature problems and remain conservative.
+   */
+  const recoverableUpdates = updates;
 
   const recoverableScans = scans.filter((scan) => {
     if (isRecoverableOfflineFailure(scan.errorCode, scan.errorMessage)) {
