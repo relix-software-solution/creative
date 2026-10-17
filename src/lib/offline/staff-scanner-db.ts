@@ -681,6 +681,65 @@ class StaffScannerDatabase extends Dexie {
           }
         });
       });
+
+    /*
+     * Version 15:
+     * - استعادة كل أشكال 409 القديمة الخاصة بتعديل الزائر (HTTP_409 أو
+     *   VISITOR_UPDATE_CONFLICT أو رسائل conflict القديمة) دون حذف changes.
+     * - هذه الترقية مقصودة لإنقاذ عمليات "تحتاج مراجعة" الموجودة أصلًا
+     *   على أجهزة الفعالية، ثم تمريرها لمسار rebase + retry الجديد.
+     */
+    this.version(15)
+      .stores({
+        visitors:
+          "id, eventId, snapshotId, publicId, fullName, phone, email, status, attendeeTypeId, searchText, syncStatus, *qrLookupKeys, updatedAt",
+        visitorUpdates:
+          "++id, operationId, eventId, registrationId, status, retryable, createdAt, updatedAt, lastAttemptAt, syncedAt",
+      })
+      .upgrade(async (transaction) => {
+        const visitorsTable = transaction.table("visitors") as Table<
+          CachedStaffVisitor,
+          string
+        >;
+        const updatesTable = transaction.table("visitorUpdates") as Table<
+          QueuedStaffVisitorUpdate,
+          number
+        >;
+
+        const updates = await updatesTable.toArray();
+        const recoveredRegistrationIds = new Set<string>();
+
+        for (const update of updates) {
+          if (
+            update.status === "PERMANENT_FAILED" &&
+            isRecoverableVisitorUpdateConflict(
+              update.errorCode,
+              update.errorMessage,
+            )
+          ) {
+            recoveredRegistrationIds.add(update.registrationId);
+
+            await updatesTable.update(update.id!, {
+              status: "FAILED",
+              retryable: true,
+              lastAttemptAt: null,
+              syncedAt: null,
+            });
+          }
+        }
+
+        for (const registrationId of recoveredRegistrationIds) {
+          const visitor = await visitorsTable.get(registrationId);
+
+          if (visitor?.syncStatus === "LOCAL_FAILED") {
+            await visitorsTable.update(registrationId, {
+              syncStatus: "LOCAL_PENDING",
+              localUpdatedAt:
+                visitor.localUpdatedAt ?? new Date().toISOString(),
+            });
+          }
+        }
+      });
   }
 }
 
@@ -825,6 +884,40 @@ function isRecoverableOfflineFailure(
     code.startsWith("NETWORK_") ||
     code.startsWith("UNKNOWN_") ||
     code.startsWith("UNEXPECTED_OFFLINE_OPERATION_STATUS_")
+  );
+}
+
+function isRecoverableVisitorUpdateConflict(
+  errorCode: unknown,
+  errorMessage?: unknown,
+) {
+  const code = String(errorCode ?? "")
+    .trim()
+    .toUpperCase();
+  const message = String(errorMessage ?? "")
+    .trim()
+    .toUpperCase();
+
+  if (
+    code === "VISITOR_UPDATE_CONFLICT" ||
+    code === "HTTP_409" ||
+    code === "CONFLICT" ||
+    code.includes("409") ||
+    code.includes("VISITOR_UPDATE_CONFLICT")
+  ) {
+    return true;
+  }
+
+  return (
+    message.includes("VISITOR_UPDATE_CONFLICT") ||
+    message.includes("HTTP 409") ||
+    message.includes("STATUS CODE 409") ||
+    message.includes("CONFLICT") ||
+    message.includes("EXPECTEDUPDATEDAT") ||
+    message.includes("EXPECTED UPDATED AT") ||
+    message.includes("NEWER VERSION") ||
+    message.includes("NEWER COPY") ||
+    message.includes("UPDATED BY ANOTHER")
   );
 }
 
@@ -3861,7 +3954,10 @@ export async function syncQueuedStaffVisitorUpdates(options: {
       }
     }
 
-    notifyOfflineQueueChanged();
+    if (result.total > 0) {
+      notifyOfflineQueueChanged();
+    }
+
     return result;
   });
 
@@ -4179,7 +4275,8 @@ export async function recoverRetryableOfflineFailures(): Promise<RecoverOfflineF
   );
 
   const recoverableUpdates = updates.filter((update) =>
-    isRecoverableOfflineFailure(update.errorCode, update.errorMessage),
+    isRecoverableOfflineFailure(update.errorCode, update.errorMessage) ||
+    isRecoverableVisitorUpdateConflict(update.errorCode, update.errorMessage),
   );
 
   const recoverableScans = scans.filter((scan) => {

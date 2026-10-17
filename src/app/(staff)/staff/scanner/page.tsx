@@ -140,6 +140,7 @@ export default function StaffScannerPage() {
   const lastSyncAttemptAtRef = useRef(0);
 
   const SYNC_COOLDOWN_MS = 2500;
+  const SESSION_REFRESH_COOLDOWN_MS = 5000;
 
   type SyncOfflineQueueOptions = {
     silent?: boolean;
@@ -150,6 +151,7 @@ export default function StaffScannerPage() {
   const visitorResultRef = useRef<HTMLElement | null>(null);
   const startedSessionRef = useRef(false);
   const sessionRefreshPromiseRef = useRef<Promise<StaffSession> | null>(null);
+  const lastSessionRefreshAtRef = useRef(0);
   const isProcessingScanRef = useRef(false);
   const scanProcessingWatchdogRef = useRef<number | null>(null);
   const resumeCameraAfterBadgeRef = useRef(false);
@@ -384,7 +386,8 @@ export default function StaffScannerPage() {
     return getVisibleFields(registrationFields, registerAttendeeTypeId);
   }, [registrationFields, registerAttendeeTypeId]);
 
-  const visitorSearchEnabled = Boolean(visitorSearch.trim().length >= 2);
+  const visitorSearchEnabled = Boolean(visitorSearchInput.trim().length >= 2);
+  const appliedVisitorSearchEnabled = Boolean(visitorSearch.trim().length >= 2);
 
   const searchedVisitors = offlineVisitorsData?.visitors?.items ?? [];
 
@@ -458,15 +461,32 @@ export default function StaffScannerPage() {
       throw new Error("SCANNER_SESSION_RENEWAL_REQUIRES_NETWORK");
     }
 
+    const hasActiveInMemorySession =
+      Boolean(staffSession?.id) &&
+      String(staffSession?.status ?? "ACTIVE").toUpperCase() === "ACTIVE" &&
+      !staffSession?.endedAt;
+
+    if (hasActiveInMemorySession && options?.force !== true) {
+      return {
+        ...activeContext,
+        staffSessionId: staffSession!.id,
+      };
+    }
+
+    /*
+     * حماية إضافية من أي rerender/event storm: حتى الاستدعاء force لا يطلق
+     * POST start-my-session عشرات المرات طالما بدأنا/جددنا جلسة قبل ثوانٍ قليلة.
+     * مسار stale-session الحقيقي يبقى قادرًا على التجديد بعد نافذة قصيرة،
+     * بينما المزامنة العادية لا تجدد الجلسة أصلًا.
+     */
     if (
-      options?.force !== true &&
-      staffSession?.id &&
-      String(staffSession.status ?? "ACTIVE").toUpperCase() === "ACTIVE" &&
-      !staffSession.endedAt
+      hasActiveInMemorySession &&
+      Date.now() - lastSessionRefreshAtRef.current <
+        SESSION_REFRESH_COOLDOWN_MS
     ) {
       return {
         ...activeContext,
-        staffSessionId: staffSession.id,
+        staffSessionId: staffSession!.id,
       };
     }
 
@@ -480,6 +500,7 @@ export default function StaffScannerPage() {
 
     try {
       const session = await request;
+      lastSessionRefreshAtRef.current = Date.now();
       return applyActiveStaffSession(session);
     } finally {
       sessionRefreshPromiseRef.current = null;
@@ -1186,7 +1207,23 @@ export default function StaffScannerPage() {
   }, [activeContext.eventId]);
 
   useEffect(() => {
-    if (!activeContext.eventId || !visitorSearchEnabled) {
+    const normalized = visitorSearchInput.trim();
+
+    const timer = window.setTimeout(() => {
+      if (normalized.length >= 2) {
+        setVisitorSearch(normalized);
+        return;
+      }
+
+      setVisitorSearch("");
+      setOfflineVisitorsData(null);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [visitorSearchInput]);
+
+  useEffect(() => {
+    if (!activeContext.eventId || !appliedVisitorSearchEnabled) {
       const timer = window.setTimeout(() => setOfflineVisitorsData(null), 0);
       return () => window.clearTimeout(timer);
     }
@@ -1204,7 +1241,7 @@ export default function StaffScannerPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeContext.eventId, visitorSearch, visitorSearchEnabled]);
+  }, [activeContext.eventId, visitorSearch, appliedVisitorSearchEnabled]);
 
   useEffect(() => {
     refreshPendingCount();
@@ -1471,11 +1508,13 @@ export default function StaffScannerPage() {
 
     try {
       /*
-       * نجدد الجلسة قبل كل جولة مزامنة. Endpoint الباك أصبح idempotent
-       * ويعيد نفس Session بدل إنهائها وإنشاء واحدة جديدة.
+       * لا نجدد الجلسة قسرًا قبل كل جولة مزامنة.
+       * هذا كان يسبب POST /start-my-session بشكل متكرر عند أي Queue event.
+       * نستخدم الجلسة الحالية، والتجديد القسري يبقى فقط لمسار stale-session
+       * الحقيقي عند رفض السيرفر للجلسة.
        */
       const renewedSession = await ensureActiveScannerSession({
-        force: true,
+        force: false,
       });
 
       const renewedSessionRecord = renewedSession as Record<string, unknown>;
