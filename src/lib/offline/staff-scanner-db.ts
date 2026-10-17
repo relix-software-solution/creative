@@ -73,6 +73,22 @@ export type CachedStaffVisitor = StaffVisitor & {
 
   qrLookupKeys?: string[];
 
+  /**
+   * آخر updatedAt مؤكد قادم من السيرفر.
+   * هذا هو المرجع الوحيد لـ optimistic concurrency ولا يتغير عند أي تعديل محلي.
+   */
+  serverUpdatedAt?: string | null;
+
+  /**
+   * آخر وقت تغيرت فيه النسخة المحلية على هذا الجهاز.
+   * يستخدم للعرض والترتيب فقط ولا يرسل إلى السيرفر كـ expectedUpdatedAt.
+   */
+  localUpdatedAt?: string | null;
+
+  /**
+   * نبقي updatedAt للتوافق مع StaffVisitor والبيانات القديمة.
+   * للسجلات القادمة من السيرفر يساوي serverUpdatedAt.
+   */
   updatedAt: string;
 };
 
@@ -582,6 +598,89 @@ class StaffScannerDatabase extends Dexie {
           visitor.qrLookupKeys = buildVisitorQrLookupKeys(visitor);
         });
       });
+
+    /*
+     * Version 14:
+     * - نفصل Revision السيرفر عن وقت التعديل المحلي.
+     * - نعيد تعارضات VISITOR_UPDATE_CONFLICT القديمة إلى Queue قابلة للمحاولة.
+     * - بهذا لا يبقى تعديل صالح عالقًا ضمن "تحتاج مراجعة" فقط لأن جهازًا آخر
+     *   حدّث نفس الزائر قبل هذا الجهاز.
+     */
+    this.version(14)
+      .stores({
+        visitors:
+          "id, eventId, snapshotId, publicId, fullName, phone, email, status, attendeeTypeId, searchText, syncStatus, *qrLookupKeys, updatedAt",
+        visitorUpdates:
+          "++id, operationId, eventId, registrationId, status, retryable, createdAt, updatedAt, lastAttemptAt, syncedAt",
+      })
+      .upgrade(async (transaction) => {
+        const visitorsTable = transaction.table("visitors") as Table<
+          CachedStaffVisitor,
+          string
+        >;
+        const updatesTable = transaction.table("visitorUpdates") as Table<
+          QueuedStaffVisitorUpdate,
+          number
+        >;
+
+        const queuedUpdates = await updatesTable.toArray();
+        const expectedRevisionByRegistrationId = new Map<string, string>();
+        const recoveredConflictRegistrationIds = new Set<string>();
+
+        for (const update of queuedUpdates) {
+          if (update.expectedUpdatedAt) {
+            expectedRevisionByRegistrationId.set(
+              update.registrationId,
+              update.expectedUpdatedAt,
+            );
+          }
+
+          if (
+            update.status === "PERMANENT_FAILED" &&
+            String(update.errorCode ?? "").toUpperCase() ===
+              "VISITOR_UPDATE_CONFLICT"
+          ) {
+            recoveredConflictRegistrationIds.add(update.registrationId);
+          }
+        }
+
+        await updatesTable.toCollection().modify((update) => {
+          if (
+            update.status === "PERMANENT_FAILED" &&
+            String(update.errorCode ?? "").toUpperCase() ===
+              "VISITOR_UPDATE_CONFLICT"
+          ) {
+            update.status = "FAILED";
+            update.retryable = true;
+            update.lastAttemptAt = null;
+          }
+        });
+
+        await visitorsTable.toCollection().modify((visitor) => {
+          const queuedExpected = expectedRevisionByRegistrationId.get(
+            visitor.id,
+          );
+
+          visitor.serverUpdatedAt =
+            visitor.serverUpdatedAt ??
+            queuedExpected ??
+            (visitor.syncStatus === "CACHED" ||
+            visitor.syncStatus === "LOCAL_SYNCED"
+              ? visitor.updatedAt
+              : null);
+
+          visitor.localUpdatedAt =
+            visitor.localUpdatedAt ??
+            (visitor.syncStatus === "CACHED" ? null : visitor.updatedAt);
+
+          if (
+            recoveredConflictRegistrationIds.has(visitor.id) &&
+            visitor.syncStatus === "LOCAL_FAILED"
+          ) {
+            visitor.syncStatus = "LOCAL_PENDING";
+          }
+        });
+      });
   }
 }
 
@@ -662,7 +761,6 @@ const NON_RECOVERABLE_OFFLINE_FAILURE_CODES = new Set([
   "OFFLINE_REGISTRATION_RESOURCE_NOT_FOUND",
   "OFFLINE_REGISTRATION_CONFLICT",
   "LEGACY_UNSIGNED_OFFLINE_QR",
-  "VISITOR_UPDATE_CONFLICT",
 ]);
 
 function isRecoverableOfflineFailure(
@@ -852,6 +950,8 @@ function normalizeCachedVisitor(
   const attendeeTypeId =
     visitor.attendeeType?.id ?? visitor.attendeeTypeId ?? null;
 
+  const serverUpdatedAt = getVisitorUpdatedAt(visitor);
+
   const normalized: CachedStaffVisitor = {
     ...visitor,
 
@@ -864,7 +964,9 @@ function normalizeCachedVisitor(
 
     qrLookupKeys: [],
 
-    updatedAt: getVisitorUpdatedAt(visitor),
+    serverUpdatedAt,
+    localUpdatedAt: null,
+    updatedAt: serverUpdatedAt,
   };
 
   normalized.qrLookupKeys = buildVisitorQrLookupKeys(normalized);
@@ -1467,8 +1569,18 @@ function toStaffVisitorFromRegisterResponse(
       queued.customFields ||
       {},
 
-    registeredAt: new Date().toISOString(),
-    createdAt: queued.createdAtDevice,
+    registeredAt:
+      registration.registeredAt ??
+      response.registeredAt ??
+      new Date().toISOString(),
+    createdAt:
+      registration.createdAt ?? response.createdAt ?? queued.createdAtDevice,
+    updatedAt:
+      registration.updatedAt ??
+      response.updatedAt ??
+      registration.createdAt ??
+      response.createdAt ??
+      queued.createdAtDevice,
 
     attendeeType: toStaffVisitorAttendeeType(queued.attendeeType),
 
@@ -1516,7 +1628,7 @@ function isLocalSyncedVisitorRecent(visitor: CachedStaffVisitor) {
     return false;
   }
 
-  const updatedAt = parseDateMs(visitor.updatedAt);
+  const updatedAt = parseDateMs(visitor.localUpdatedAt ?? visitor.updatedAt);
 
   if (!updatedAt) {
     return false;
@@ -3088,7 +3200,8 @@ export async function searchCachedStaffVisitors(
     }
 
     return (
-      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      new Date(right.localUpdatedAt ?? right.updatedAt).getTime() -
+      new Date(left.localUpdatedAt ?? left.updatedAt).getTime()
     );
   });
 
@@ -3228,7 +3341,7 @@ export async function saveCachedStaffVisitorQr(options: {
       status: "ACTIVE",
     },
 
-    updatedAt: new Date().toISOString(),
+    localUpdatedAt: new Date().toISOString(),
   };
 
   updatedVisitor.searchText = buildVisitorSearchText(updatedVisitor);
@@ -3272,10 +3385,10 @@ function mergeVisitorUpdate(
     syncStatus: "LOCAL_PENDING",
 
     /*
-     * هذا تاريخ تعديل الجهاز، وليس تاريخ نسخة السيرفر.
-     * expectedUpdatedAt يبقى محفوظًا داخل Queue.
+     * لا نلمس updatedAt/serverUpdatedAt عند التعديل المحلي.
+     * optimistic concurrency يجب أن يبقى مربوطًا بآخر Revision مؤكد من السيرفر.
      */
-    updatedAt: new Date().toISOString(),
+    localUpdatedAt: new Date().toISOString(),
   };
 
   updatedVisitor.searchText = buildVisitorSearchText(updatedVisitor);
@@ -3306,26 +3419,40 @@ export async function queueStaffVisitorUpdate(options: {
   }
 
   /*
-   * التسجيل المحلي الجديد لم يحصل بعد على ID رسمي من السيرفر.
-   * تعديله يتم على نفس السجل المحلي، ولا ننشئ PATCH منفصلًا له.
+   * offlineLocalId/offlineOperationId يبقيان كـaliases حتى بعد نجاح المزامنة،
+   * لذلك وجودهما وحده لا يعني أن التسجيل ما زال محليًا.
+   * نعتمد حالة Queue الأصلية: فقط التسجيل الذي لم يصل إلى SYNCED بعد
+   * يجب أن يندمج تعديله داخل عملية الإنشاء المحلية.
    */
-  const isOfflineLocalVisitor =
-    visitor.id.startsWith("offline-visitor-") ||
-    Boolean(visitor.offlineLocalId) ||
-    Boolean(visitor.offlineOperationId);
+  let queuedRegistration: QueuedStaffVisitorRegistration | undefined;
 
-  /*
-   * أي تسجيل محلي لم يحصل على ID رسمي بعد،
-   * سواء كان PENDING أو FAILED، يجب تعديل عملية
-   * التسجيل الأصلية وعدم إرسال PATCH إلى السيرفر.
-   */
-  if (isOfflineLocalVisitor) {
-    const updatedVisitor = mergeVisitorUpdate(visitor, options.changes);
+  if (visitor.offlineOperationId) {
+    queuedRegistration = await staffScannerDb.visitorRegistrations
+      .where("operationId")
+      .equals(visitor.offlineOperationId)
+      .first();
+  }
 
-    const queuedRegistration = await staffScannerDb.visitorRegistrations
+  if (!queuedRegistration && visitor.offlineLocalId) {
+    queuedRegistration = await staffScannerDb.visitorRegistrations
+      .where("localId")
+      .equals(visitor.offlineLocalId)
+      .first();
+  }
+
+  if (!queuedRegistration && visitor.id.startsWith("offline-visitor-")) {
+    queuedRegistration = await staffScannerDb.visitorRegistrations
       .where("localId")
       .equals(visitor.id)
       .first();
+  }
+
+  const isOfflineLocalVisitor =
+    visitor.id.startsWith("offline-visitor-") ||
+    Boolean(queuedRegistration && queuedRegistration.status !== "SYNCED");
+
+  if (isOfflineLocalVisitor) {
+    const updatedVisitor = mergeVisitorUpdate(visitor, options.changes);
 
     if (!queuedRegistration?.id) {
       throw new Error("OFFLINE_REGISTRATION_QUEUE_NOT_FOUND");
@@ -3397,7 +3524,10 @@ export async function queueStaffVisitorUpdate(options: {
     .first();
 
   const expectedUpdatedAt =
-    existingPendingUpdate?.expectedUpdatedAt ?? visitor.updatedAt ?? null;
+    existingPendingUpdate?.expectedUpdatedAt ??
+    visitor.serverUpdatedAt ??
+    visitor.updatedAt ??
+    null;
 
   const mergedChanges: UpdateStaffVisitorPayload = {
     ...(existingPendingUpdate?.changes ?? {}),
@@ -3514,14 +3644,13 @@ export async function syncQueuedStaffVisitorUpdates(options: {
     registrationId: string,
     payload: UpdateStaffVisitorPayload,
   ) => Promise<UpdateStaffVisitorResponse>;
+  getVisitor?: (registrationId: string) => Promise<StaffVisitor>;
 }) {
   const executed = await runWithOfflineSyncLock(async () => {
     const queuedUpdates = await staffScannerDb.visitorUpdates
       .where("status")
       .anyOf(["PENDING", "FAILED"])
-      .filter(
-        (item) => item.retryable !== false && isQueueRetryDue(item),
-      )
+      .filter((item) => item.retryable !== false && isQueueRetryDue(item))
       .sortBy("createdAt");
 
     const result = {
@@ -3542,43 +3671,121 @@ export async function syncQueuedStaffVisitorUpdates(options: {
 
       await staffScannerDb.visitorUpdates.update(queued.id, {
         status: "SYNCING",
-
         attemptCount: (queued.attemptCount ?? 0) + 1,
-
         lastAttemptAt: attemptAt,
-
         errorCode: null,
         errorMessage: null,
       });
 
-      try {
-        const response = await options.updateVisitor(queued.registrationId, {
-          ...queued.changes,
+      let expectedUpdatedAt = queued.expectedUpdatedAt ?? null;
+      let response: UpdateStaffVisitorResponse | null = null;
+      let finalError: unknown = null;
+      let conflictRebaseCount = 0;
 
-          expectedUpdatedAt: queued.expectedUpdatedAt ?? undefined,
-        });
+      /*
+       * قد يكون الجهاز قديمًا بدقائق عن السيرفر (جوال/لابتوب آخر أو Delta
+       * لم يصل بعد). عند 409 لا نحول التعديل مباشرة إلى "تحتاج مراجعة".
+       * نقرأ النسخة الحالية من السيرفر، نعيد تطبيق الحقول التي عدّلها الموظف
+       * فقط، ثم نعيد PATCH على Revision الحالي. نسمح بمحاولتين لحماية السباق
+       * مع جهاز آخر يعدل في نفس اللحظة.
+       */
+      while (true) {
+        try {
+          response = await options.updateVisitor(queued.registrationId, {
+            ...queued.changes,
+            expectedUpdatedAt: expectedUpdatedAt ?? undefined,
+          });
+          break;
+        } catch (error) {
+          const classified = classifyQueueError(error);
+          const conflict =
+            classified.httpStatus === 409 ||
+            classified.code === "VISITOR_UPDATE_CONFLICT" ||
+            classified.code === "HTTP_409";
 
+          if (
+            !conflict ||
+            !options.getVisitor ||
+            conflictRebaseCount >= 2
+          ) {
+            finalError = error;
+            break;
+          }
+
+          try {
+            const serverVisitor = await options.getVisitor(
+              queued.registrationId,
+            );
+            const serverUpdatedAt = getVisitorUpdatedAt(serverVisitor);
+            const currentVisitor = await staffScannerDb.visitors.get(
+              queued.registrationId,
+            );
+
+            const normalizedServerVisitor = mergeCachedVisitorQrState(
+              normalizeCachedVisitor(
+                queued.eventId,
+                serverVisitor,
+                "CACHED",
+                currentVisitor?.snapshotId ?? null,
+              ),
+              currentVisitor,
+            );
+
+            const rebasedVisitor = mergeVisitorUpdate(
+              normalizedServerVisitor,
+              queued.changes,
+            );
+
+            rebasedVisitor.serverUpdatedAt = serverUpdatedAt;
+            rebasedVisitor.updatedAt = serverUpdatedAt;
+
+            await staffScannerDb.transaction(
+              "rw",
+              staffScannerDb.visitors,
+              staffScannerDb.visitorUpdates,
+              async () => {
+                await staffScannerDb.visitors.put(rebasedVisitor);
+                await staffScannerDb.visitorUpdates.update(queued.id!, {
+                  expectedUpdatedAt: serverUpdatedAt,
+                  status: "SYNCING",
+                  retryable: true,
+                  errorCode: null,
+                  errorMessage: null,
+                  updatedAt: new Date().toISOString(),
+                });
+              },
+            );
+
+            expectedUpdatedAt = serverUpdatedAt;
+            conflictRebaseCount += 1;
+          } catch (refreshError) {
+            finalError = refreshError;
+            break;
+          }
+        }
+      }
+
+      if (response) {
         const currentVisitor = await staffScannerDb.visitors.get(
           queued.registrationId,
         );
 
         if (currentVisitor) {
+          const serverUpdatedAt = response.updatedAt || new Date().toISOString();
           const syncedVisitor: CachedStaffVisitor = {
             ...currentVisitor,
-
             ...response,
-
             attendeeType: response.attendeeType ?? currentVisitor.attendeeType,
-
             customFields:
               response.customFields ?? currentVisitor.customFields ?? {},
-
             syncStatus: "LOCAL_SYNCED",
-
-            updatedAt: response.updatedAt || new Date().toISOString(),
+            serverUpdatedAt,
+            localUpdatedAt: new Date().toISOString(),
+            updatedAt: serverUpdatedAt,
           };
 
           syncedVisitor.searchText = buildVisitorSearchText(syncedVisitor);
+          syncedVisitor.qrLookupKeys = buildVisitorQrLookupKeys(syncedVisitor);
 
           await staffScannerDb.transaction(
             "rw",
@@ -3589,16 +3796,12 @@ export async function syncQueuedStaffVisitorUpdates(options: {
 
               await staffScannerDb.visitorUpdates.update(queued.id!, {
                 status: "SYNCED",
-
                 retryable: false,
-
                 syncedAt: new Date().toISOString(),
-
                 updatedAt: new Date().toISOString(),
-
                 errorCode: null,
                 errorMessage: null,
-
+                expectedUpdatedAt: serverUpdatedAt,
                 response,
               });
             },
@@ -3608,57 +3811,57 @@ export async function syncQueuedStaffVisitorUpdates(options: {
             status: "SYNCED",
             retryable: false,
             syncedAt: new Date().toISOString(),
+            expectedUpdatedAt: response.updatedAt,
             response,
           });
         }
 
         result.synced += 1;
-      } catch (error) {
-        const classified = classifyQueueError(error);
+        continue;
+      }
 
-        /*
-         * 409 يعني أن نسخة السيرفر تغيرت بعد تنزيلها.
-         * لا نعيد المحاولة تلقائيًا حتى لا نكتب فوق بيانات أحدث.
-         */
-        const conflict =
-          classified.httpStatus === 409 ||
-          classified.code === "VISITOR_UPDATE_CONFLICT";
+      const classified = classifyQueueError(finalError);
+      const conflict =
+        classified.httpStatus === 409 ||
+        classified.code === "VISITOR_UPDATE_CONFLICT" ||
+        classified.code === "HTTP_409";
 
-        const retryable = conflict ? false : classified.retryable;
+      /*
+       * حتى لو حدث سباق متكرر جدًا وبقي 409 بعد محاولتي rebase، نبقيه
+       * retryable بدل PERMANENT_FAILED. المزامنة التالية ستقرأ Revision أحدث
+       * وتحاول مجددًا؛ لا نرمي تعديل المستخدم إلى "تحتاج مراجعة" بلا داعٍ.
+       */
+      const retryable = conflict ? true : classified.retryable;
 
-        await staffScannerDb.transaction(
-          "rw",
-          staffScannerDb.visitors,
-          staffScannerDb.visitorUpdates,
-          async () => {
-            await staffScannerDb.visitorUpdates.update(queued.id!, {
-              status: retryable ? "FAILED" : "PERMANENT_FAILED",
+      await staffScannerDb.transaction(
+        "rw",
+        staffScannerDb.visitors,
+        staffScannerDb.visitorUpdates,
+        async () => {
+          await staffScannerDb.visitorUpdates.update(queued.id!, {
+            status: retryable ? "FAILED" : "PERMANENT_FAILED",
+            retryable,
+            errorCode: conflict ? "VISITOR_UPDATE_CONFLICT" : classified.code,
+            errorMessage: classified.message,
+            lastAttemptAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
 
-              retryable,
+          await staffScannerDb.visitors.update(queued.registrationId, {
+            syncStatus: retryable ? "LOCAL_PENDING" : "LOCAL_FAILED",
+            localUpdatedAt: new Date().toISOString(),
+          });
+        },
+      );
 
-              errorCode: conflict ? "VISITOR_UPDATE_CONFLICT" : classified.code,
-
-              errorMessage: classified.message,
-
-              lastAttemptAt: new Date().toISOString(),
-
-              updatedAt: new Date().toISOString(),
-            });
-
-            await staffScannerDb.visitors.update(queued.registrationId, {
-              syncStatus: retryable ? "LOCAL_PENDING" : "LOCAL_FAILED",
-            });
-          },
-        );
-
-        if (retryable) {
-          result.failed += 1;
-        } else {
-          result.permanentFailed += 1;
-        }
+      if (retryable) {
+        result.failed += 1;
+      } else {
+        result.permanentFailed += 1;
       }
     }
 
+    notifyOfflineQueueChanged();
     return result;
   });
 
@@ -4287,7 +4490,7 @@ export async function syncQueuedVisitorRegistrations(options: {
           cachedSyncedVisitor.qrLookupKeys =
             buildVisitorQrLookupKeys(cachedSyncedVisitor);
 
-          cachedSyncedVisitor.updatedAt = new Date().toISOString();
+          cachedSyncedVisitor.localUpdatedAt = new Date().toISOString();
 
           const canonicalPublicId =
             firstString(

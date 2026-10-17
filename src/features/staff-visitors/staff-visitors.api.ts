@@ -342,6 +342,20 @@ export async function getStaffVisitors(params: StaffVisitorsParams = {}) {
   return unwrapApiData<StaffVisitorsResponse>(response.data);
 }
 
+export async function getStaffVisitorById(registrationId: string) {
+  const response = await adminClient.get(
+    `/staff/visitors/${encodeURIComponent(registrationId)}`,
+    {
+      headers: {
+        "Cache-Control": "no-cache, no-store, max-age=0",
+        Pragma: "no-cache",
+      },
+    },
+  );
+
+  return unwrapApiData<StaffVisitor>(response.data);
+}
+
 /**
  * تنزيل دفعة واحدة من Offline Snapshot.
  *

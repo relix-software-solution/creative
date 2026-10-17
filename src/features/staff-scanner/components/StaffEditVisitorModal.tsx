@@ -262,11 +262,39 @@ export function StaffEditVisitorModal({
       }),
     );
 
-    await onSubmit(visitor, {
-      fullName: form.fullName.trim(),
-      phone: form.phone.trim(),
-      customFields: cleanedCustomFields,
-    });
+    const changes: UpdateStaffVisitorPayload = {};
+
+    const nextFullName = form.fullName.trim();
+    const nextPhone = form.phone.trim();
+
+    if (nextFullName !== String(visitor.fullName ?? "").trim()) {
+      changes.fullName = nextFullName;
+    }
+
+    if (nextPhone !== String(visitor.phone ?? "").trim()) {
+      changes.phone = nextPhone;
+    }
+
+    const initialCustomFields = Object.fromEntries(
+      Object.entries(
+        normalizeInitialCustomFields(visitor, registrationFields),
+      ).filter(([, value]) => {
+        return value !== undefined && value !== null && value !== "";
+      }),
+    );
+
+    if (
+      JSON.stringify(initialCustomFields) !== JSON.stringify(cleanedCustomFields)
+    ) {
+      changes.customFields = cleanedCustomFields;
+    }
+
+    if (Object.keys(changes).length === 0) {
+      onClose();
+      return;
+    }
+
+    await onSubmit(visitor, changes);
   }
 
   function renderCustomField(field: PublicRegistrationField) {

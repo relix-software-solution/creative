@@ -31,6 +31,7 @@ import {
   updateStaffVisitor,
   UpdateStaffVisitorPayload,
   getStaffOfflineState,
+  getStaffVisitorById,
   getStaffVisitors,
   streamStaffVisitorRealtime,
 } from "@/features/staff-visitors/staff-visitors.api";
@@ -1579,6 +1580,7 @@ export default function StaffScannerPage() {
 
       const visitorUpdateResult = await syncQueuedStaffVisitorUpdates({
         updateVisitor: updateStaffVisitor,
+        getVisitor: getStaffVisitorById,
       });
 
       if (visitorUpdateResult.busy) {
@@ -2726,6 +2728,7 @@ export default function StaffScannerPage() {
 
       const syncResult = await syncQueuedStaffVisitorUpdates({
         updateVisitor: updateStaffVisitor,
+        getVisitor: getStaffVisitorById,
       });
 
       await refreshPendingCount();
@@ -2737,7 +2740,7 @@ export default function StaffScannerPage() {
 
       if (syncResult.permanentFailed > 0) {
         toast.error(
-          "تم حفظ التعديل محليًا، لكن يوجد تعارض مع نسخة أحدث على السيرفر.",
+          "تم حفظ التعديل محليًا، لكن تعذر رفعه بسبب خطأ غير قابل لإعادة المحاولة.",
         );
         return;
       }
