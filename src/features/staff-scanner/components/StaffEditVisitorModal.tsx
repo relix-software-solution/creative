@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Loader2, Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
+import { Select } from "@/components/ui/select";
 import { PublicRegistrationField } from "@/features/public-events/public-events.types";
 import {
   StaffVisitor,
@@ -18,6 +19,96 @@ type EditVisitorForm = {
 
 function getFieldLabel(field: PublicRegistrationField) {
   return field.labelAr || field.labelEn || field.key;
+}
+
+
+type StaffSelectOption = {
+  value: string;
+  labelAr?: string | null;
+  labelEn?: string | null;
+};
+
+function getStaffSelectOptions(field: PublicRegistrationField) {
+  const rawOptions = Array.isArray(field.options) ? field.options : [];
+
+  return rawOptions
+    .map((option): { value: string; label: string } | null => {
+      if (typeof option === "string") {
+        const value = option.trim();
+
+        return value ? { value, label: value } : null;
+      }
+
+      if (!option || typeof option !== "object") {
+        return null;
+      }
+
+      const typedOption = option as StaffSelectOption;
+      const value = String(typedOption.value ?? "").trim();
+
+      if (!value) {
+        return null;
+      }
+
+      return {
+        value,
+        label:
+          String(typedOption.labelAr ?? "").trim() ||
+          String(typedOption.labelEn ?? "").trim() ||
+          value,
+      };
+    })
+    .filter((option): option is { value: string; label: string } => Boolean(option));
+}
+
+function canonicalizeSelectValue(
+  field: PublicRegistrationField,
+  value: unknown,
+) {
+  if (value === undefined || value === null || value === "") {
+    return value;
+  }
+
+  const raw = String(value).trim();
+  const options = getStaffSelectOptions(field);
+
+  const exact = options.find((option) => option.value === raw);
+
+  if (exact) {
+    return exact.value;
+  }
+
+  const normalized = raw.toLocaleLowerCase();
+  const caseInsensitive = options.find((option) => {
+    return (
+      option.value.toLocaleLowerCase() === normalized ||
+      option.label.toLocaleLowerCase() === normalized
+    );
+  });
+
+  return caseInsensitive?.value ?? raw;
+}
+
+function isLikelyPhoneValue(value: unknown) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw || /[A-Za-z\u0600-\u06FF]/.test(raw)) {
+    return false;
+  }
+
+  return raw.replace(/\D/g, "").length >= 7;
+}
+
+function getInitialPhone(visitor: StaffVisitor) {
+  const currentPhone = String(visitor.phone ?? "").trim();
+  const customFields = (visitor.customFields ?? {}) as Record<string, unknown>;
+  const landline = String(customFields.landline ?? "").trim();
+
+  if (!isLikelyPhoneValue(currentPhone) && isLikelyPhoneValue(landline)) {
+    return landline;
+  }
+
+  return currentPhone;
 }
 
 function normalizeFieldKey(key: string) {
@@ -89,21 +180,26 @@ function normalizeInitialCustomFields(
     const currentValue = normalized[field.key];
 
     if (
-      currentValue !== undefined &&
-      currentValue !== null &&
-      currentValue !== ""
+      currentValue === undefined ||
+      currentValue === null ||
+      currentValue === ""
     ) {
-      continue;
+      const legacyValue = getLegacyDynamicFieldValue(legacyVisitor, field.key);
+
+      if (
+        legacyValue !== undefined &&
+        legacyValue !== null &&
+        legacyValue !== ""
+      ) {
+        normalized[field.key] = legacyValue;
+      }
     }
 
-    const legacyValue = getLegacyDynamicFieldValue(legacyVisitor, field.key);
-
-    if (
-      legacyValue !== undefined &&
-      legacyValue !== null &&
-      legacyValue !== ""
-    ) {
-      normalized[field.key] = legacyValue;
+    if (String(field.type ?? "").toUpperCase() === "SELECT") {
+      normalized[field.key] = canonicalizeSelectValue(
+        field,
+        normalized[field.key],
+      );
     }
   }
 
@@ -145,7 +241,7 @@ export function StaffEditVisitorModal({
 
     setForm({
       fullName: visitor.fullName ?? "",
-      phone: visitor.phone ?? "",
+      phone: getInitialPhone(visitor),
     });
 
     setCustomFields(normalizeInitialCustomFields(visitor, registrationFields));
@@ -241,6 +337,21 @@ export function StaffEditVisitorModal({
 
       if (field.isRequired && isEmpty) {
         nextErrors[field.key] = `${getFieldLabel(field)} مطلوب`;
+        continue;
+      }
+
+      if (
+        !isEmpty &&
+        String(field.type ?? "").toUpperCase() === "SELECT"
+      ) {
+        const allowedValues = getStaffSelectOptions(field).map(
+          (option) => option.value,
+        );
+        const currentValue = String(value ?? "").trim();
+
+        if (!allowedValues.includes(currentValue)) {
+          nextErrors[field.key] = `${getFieldLabel(field)} يحتوي قيمة قديمة؛ اختر قيمة صحيحة`;
+        }
       }
     }
 
@@ -342,6 +453,43 @@ export function StaffEditVisitorModal({
               nextValue === "" ? "" : Number(nextValue),
             )
           }
+        />
+      );
+    }
+
+    if (type === "SELECT") {
+      const currentValue =
+        value === undefined || value === null ? "" : String(value);
+      const options = getStaffSelectOptions(field);
+      const isLegacyInvalidValue =
+        Boolean(currentValue) &&
+        !options.some((option) => option.value === currentValue);
+
+      const selectOptions = isLegacyInvalidValue
+        ? [
+            {
+              value: currentValue,
+              label: `قيمة قديمة: ${currentValue}`,
+              disabled: true,
+            },
+            ...options,
+          ]
+        : options;
+
+      return (
+        <Select
+          key={field.key}
+          label={label}
+          value={currentValue}
+          options={selectOptions}
+          error={errors[field.key]}
+          disabled={isSubmitting}
+          required={field.isRequired}
+          placeholder="اختر قيمة"
+          onChange={(nextValue) => updateCustomField(field.key, nextValue)}
+          accentColor={theme.primary}
+          textColor={theme.text}
+          borderRadius={theme.radius}
         />
       );
     }

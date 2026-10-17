@@ -740,6 +740,90 @@ class StaffScannerDatabase extends Dexie {
           }
         }
       });
+
+    /*
+     * Version 16 - live-event rescue hardening:
+     * - لا نعيد تشغيل العمليات القديمة التي تم تجاوزها بعملية أحدث لنفس الزائر.
+     * - نستعيد فقط أحدث تعديل لكل زائر.
+     * - نصلح قيم qualification القديمة Resident/Specialist إلى القيم canonical.
+     * - نصلح phone الواضح أنه امتلأ بالتخصص عندما توجد قيمة هاتف رقمية في landline.
+     * - نعيد عمليات SYNCING المتوقفة إلى FAILED بدل بقائها عالقة للأبد.
+     * - القيم غير القابلة للتطبيع بأمان (مثل نص حر في qualification) تبقى للمراجعة اليدوية.
+     */
+    this.version(16)
+      .stores({
+        visitors:
+          "id, eventId, snapshotId, publicId, fullName, phone, email, status, attendeeTypeId, searchText, syncStatus, *qrLookupKeys, updatedAt",
+        visitorUpdates:
+          "++id, operationId, eventId, registrationId, status, retryable, createdAt, updatedAt, lastAttemptAt, syncedAt",
+      })
+      .upgrade(async (transaction) => {
+        const visitorsTable = transaction.table("visitors") as Table<
+          CachedStaffVisitor,
+          string
+        >;
+        const updatesTable = transaction.table("visitorUpdates") as Table<
+          QueuedStaffVisitorUpdate,
+          number
+        >;
+
+        const allUpdates = await updatesTable.toArray();
+        const latestUpdates = selectLatestVisitorUpdates(allUpdates);
+        const now = new Date().toISOString();
+
+        for (const update of latestUpdates) {
+          if (!update.id) {
+            continue;
+          }
+
+          const sanitized = sanitizeLegacyVisitorUpdateChanges(update.changes);
+          const nextPatch: Partial<QueuedStaffVisitorUpdate> = {};
+
+          if (sanitized.modified) {
+            nextPatch.changes = sanitized.changes;
+            nextPatch.updatedAt = now;
+          }
+
+          const safelyRecoverablePermanentFailure =
+            update.status === "PERMANENT_FAILED" &&
+            isSafelyRecoverableVisitorUpdate(update);
+
+          const interruptedSync = update.status === "SYNCING";
+
+          if (safelyRecoverablePermanentFailure || interruptedSync) {
+            nextPatch.status = "FAILED";
+            nextPatch.retryable = true;
+            nextPatch.lastAttemptAt = null;
+            nextPatch.syncedAt = null;
+            nextPatch.updatedAt = now;
+          }
+
+          if (Object.keys(nextPatch).length > 0) {
+            await updatesTable.update(update.id, nextPatch);
+          }
+
+          if (safelyRecoverablePermanentFailure || interruptedSync) {
+            const visitor = await visitorsTable.get(update.registrationId);
+
+            if (visitor) {
+              const rebasedLocalVisitor = sanitizeLegacyVisitorUpdateChanges(
+                sanitized.changes,
+              ).changes;
+
+              const nextVisitor = mergeVisitorUpdate(
+                visitor,
+                rebasedLocalVisitor,
+              );
+
+              await visitorsTable.put({
+                ...nextVisitor,
+                syncStatus: "LOCAL_PENDING",
+                localUpdatedAt: now,
+              });
+            }
+          }
+        }
+      });
   }
 }
 
@@ -919,6 +1003,172 @@ function isRecoverableVisitorUpdateConflict(
     message.includes("NEWER COPY") ||
     message.includes("UPDATED BY ANOTHER")
   );
+}
+
+
+function canonicalizeLegacyQualification(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "resident") {
+    return "resident";
+  }
+
+  if (normalized === "specialist") {
+    return "specialist";
+  }
+
+  return null;
+}
+
+function isLikelyPhoneValue(value: unknown) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed || /[A-Za-z\u0600-\u06FF]/.test(trimmed)) {
+    return false;
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+
+  return digits.length >= 7;
+}
+
+function sanitizeLegacyVisitorUpdateChanges(
+  changes: UpdateStaffVisitorPayload,
+): {
+  changes: UpdateStaffVisitorPayload;
+  modified: boolean;
+} {
+  let modified = false;
+
+  const next: UpdateStaffVisitorPayload = {
+    ...changes,
+  };
+
+  let customFields: Record<string, unknown> | undefined;
+
+  if (
+    changes.customFields &&
+    typeof changes.customFields === "object" &&
+    !Array.isArray(changes.customFields)
+  ) {
+    customFields = {
+      ...(changes.customFields as Record<string, unknown>),
+    };
+
+    const canonicalQualification = canonicalizeLegacyQualification(
+      customFields.qualification,
+    );
+
+    if (
+      canonicalQualification &&
+      canonicalQualification !== customFields.qualification
+    ) {
+      customFields.qualification = canonicalQualification;
+      modified = true;
+    }
+
+    next.customFields = customFields;
+  }
+
+  const currentPhone = String(changes.phone ?? "").trim();
+  const landline = String(customFields?.landline ?? "").trim();
+  const specialization = String(customFields?.specialization ?? "").trim();
+
+  const phoneLooksLikeImportedText =
+    Boolean(currentPhone) &&
+    !isLikelyPhoneValue(currentPhone) &&
+    (currentPhone.toLowerCase() === specialization.toLowerCase() ||
+      /[A-Za-z\u0600-\u06FF]/.test(currentPhone));
+
+  if (phoneLooksLikeImportedText && isLikelyPhoneValue(landline)) {
+    next.phone = landline;
+    modified = true;
+  }
+
+  return {
+    changes: next,
+    modified,
+  };
+}
+
+function isQualificationValidationFailure(update: QueuedStaffVisitorUpdate) {
+  const message = String(update.errorMessage ?? "").toLowerCase();
+
+  return (
+    message.includes("qualification") &&
+    (message.includes("invalid option") || message.includes("invalid"))
+  );
+}
+
+function isDuplicateRegistrationFailure(update: QueuedStaffVisitorUpdate) {
+  const message = String(update.errorMessage ?? "").toLowerCase();
+
+  return message.includes("duplicate registration");
+}
+
+function isSafelyRecoverableVisitorUpdate(update: QueuedStaffVisitorUpdate) {
+  if (isQualificationValidationFailure(update)) {
+    const qualification = (
+      update.changes.customFields as Record<string, unknown> | undefined
+    )?.qualification;
+
+    return canonicalizeLegacyQualification(qualification) !== null;
+  }
+
+  if (isDuplicateRegistrationFailure(update)) {
+    const sanitized = sanitizeLegacyVisitorUpdateChanges(update.changes);
+
+    return sanitized.modified && sanitized.changes.phone !== update.changes.phone;
+  }
+
+  return isRecoverableVisitorUpdateConflict(
+    update.errorCode,
+    update.errorMessage,
+  );
+}
+
+function compareVisitorUpdateRecency(
+  left: QueuedStaffVisitorUpdate,
+  right: QueuedStaffVisitorUpdate,
+) {
+  const leftCreated = parseDateMs(left.createdAt) ?? 0;
+  const rightCreated = parseDateMs(right.createdAt) ?? 0;
+
+  if (leftCreated !== rightCreated) {
+    return leftCreated - rightCreated;
+  }
+
+  return (left.id ?? 0) - (right.id ?? 0);
+}
+
+function selectLatestVisitorUpdates(
+  updates: QueuedStaffVisitorUpdate[],
+): QueuedStaffVisitorUpdate[] {
+  const latestByRegistrationId = new Map<string, QueuedStaffVisitorUpdate>();
+
+  for (const update of updates) {
+    const current = latestByRegistrationId.get(update.registrationId);
+
+    if (!current || compareVisitorUpdateRecency(current, update) < 0) {
+      latestByRegistrationId.set(update.registrationId, update);
+    }
+  }
+
+  return Array.from(latestByRegistrationId.values());
+}
+
+async function getLatestStaffVisitorUpdates() {
+  const updates = await staffScannerDb.visitorUpdates.toArray();
+
+  return selectLatestVisitorUpdates(updates);
 }
 
 function getQueueRetryDelay(attemptCount: unknown) {
@@ -2093,10 +2343,50 @@ async function resetStaleSyncingRegistrations() {
   );
 }
 
+async function resetStaleSyncingVisitorUpdates() {
+  const syncing = await staffScannerDb.visitorUpdates
+    .where("status")
+    .equals("SYNCING")
+    .toArray();
+
+  const now = Date.now();
+
+  const stale = syncing.filter((item) => {
+    const lastAttemptAt =
+      parseDateMs(item.lastAttemptAt) ?? parseDateMs(item.updatedAt) ??
+      parseDateMs(item.createdAt) ?? 0;
+
+    return now - lastAttemptAt > STALE_SYNCING_TIMEOUT_MS;
+  });
+
+  if (stale.length === 0) {
+    return;
+  }
+
+  await staffScannerDb.visitorUpdates.bulkPut(
+    stale.map((item) => {
+      const sanitized = sanitizeLegacyVisitorUpdateChanges(item.changes);
+
+      return {
+        ...item,
+        changes: sanitized.changes,
+        status: "FAILED" as QueuedScanStatus,
+        retryable: true,
+        errorCode: item.errorCode || "STALE_SYNC_RECOVERED",
+        errorMessage:
+          item.errorMessage || "Previous synchronization attempt was interrupted.",
+        lastAttemptAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }),
+  );
+}
+
 async function resetStaleSyncingOperations() {
   await Promise.all([
     resetStaleSyncingScans(),
     resetStaleSyncingRegistrations(),
+    resetStaleSyncingVisitorUpdates(),
   ]);
 }
 
@@ -3706,26 +3996,26 @@ export async function queueStaffVisitorUpdate(options: {
 }
 
 export async function getPendingStaffVisitorUpdatesCount() {
-  const [pending, failed, syncing] = await Promise.all([
-    staffScannerDb.visitorUpdates.where("status").equals("PENDING").count(),
+  await resetStaleSyncingVisitorUpdates();
 
-    staffScannerDb.visitorUpdates
-      .where("status")
-      .equals("FAILED")
-      .and((item) => item.retryable !== false)
-      .count(),
+  const latestUpdates = await getLatestStaffVisitorUpdates();
 
-    staffScannerDb.visitorUpdates.where("status").equals("SYNCING").count(),
-  ]);
+  return latestUpdates.filter((item) => {
+    if (item.status === "PENDING" || item.status === "SYNCING") {
+      return true;
+    }
 
-  return pending + failed + syncing;
+    return item.status === "FAILED" && item.retryable !== false;
+  }).length;
 }
 
 export async function getPermanentFailedStaffVisitorUpdatesCount() {
-  return staffScannerDb.visitorUpdates
-    .where("status")
-    .equals("PERMANENT_FAILED")
-    .count();
+  await resetStaleSyncingVisitorUpdates();
+
+  const latestUpdates = await getLatestStaffVisitorUpdates();
+
+  return latestUpdates.filter((item) => item.status === "PERMANENT_FAILED")
+    .length;
 }
 
 export async function getQueuedStaffVisitorUpdates() {
@@ -3740,11 +4030,17 @@ export async function syncQueuedStaffVisitorUpdates(options: {
   getVisitor?: (registrationId: string) => Promise<StaffVisitor>;
 }) {
   const executed = await runWithOfflineSyncLock(async () => {
-    const queuedUpdates = await staffScannerDb.visitorUpdates
-      .where("status")
-      .anyOf(["PENDING", "FAILED"])
-      .filter((item) => item.retryable !== false && isQueueRetryDue(item))
-      .sortBy("createdAt");
+    await resetStaleSyncingVisitorUpdates();
+
+    const latestUpdates = await getLatestStaffVisitorUpdates();
+    const queuedUpdates = latestUpdates
+      .filter(
+        (item) =>
+          (item.status === "PENDING" || item.status === "FAILED") &&
+          item.retryable !== false &&
+          isQueueRetryDue(item),
+      )
+      .sort((left, right) => compareVisitorUpdateRecency(left, right));
 
     const result = {
       total: queuedUpdates.length,
@@ -3758,6 +4054,43 @@ export async function syncQueuedStaffVisitorUpdates(options: {
       if (!queued.id) {
         result.skipped += 1;
         continue;
+      }
+
+      const sanitizedQueuedChanges = sanitizeLegacyVisitorUpdateChanges(
+        queued.changes,
+      );
+
+      if (sanitizedQueuedChanges.modified) {
+        queued.changes = sanitizedQueuedChanges.changes;
+
+        await staffScannerDb.transaction(
+          "rw",
+          staffScannerDb.visitorUpdates,
+          staffScannerDb.visitors,
+          async () => {
+            await staffScannerDb.visitorUpdates.update(queued.id!, {
+              changes: sanitizedQueuedChanges.changes,
+              updatedAt: new Date().toISOString(),
+            });
+
+            const cachedVisitor = await staffScannerDb.visitors.get(
+              queued.registrationId,
+            );
+
+            if (cachedVisitor) {
+              const sanitizedVisitor = mergeVisitorUpdate(
+                cachedVisitor,
+                sanitizedQueuedChanges.changes,
+              );
+
+              await staffScannerDb.visitors.put({
+                ...sanitizedVisitor,
+                syncStatus: "LOCAL_PENDING",
+                localUpdatedAt: new Date().toISOString(),
+              });
+            }
+          },
+        );
       }
 
       const previousErrorCode = queued.errorCode;
@@ -4281,22 +4614,23 @@ export type RecoverOfflineFailuresResult = {
 export async function recoverRetryableOfflineFailures(): Promise<RecoverOfflineFailuresResult> {
   await resetStaleSyncingOperations();
 
-  const [registrations, updates, scans] = await Promise.all([
+  const [registrations, allUpdates, scans] = await Promise.all([
     staffScannerDb.visitorRegistrations
       .where("status")
       .equals("PERMANENT_FAILED")
       .toArray(),
 
-    staffScannerDb.visitorUpdates
-      .where("status")
-      .equals("PERMANENT_FAILED")
-      .toArray(),
+    staffScannerDb.visitorUpdates.toArray(),
 
     staffScannerDb.scans
       .where("status")
       .equals("PERMANENT_FAILED")
       .toArray(),
   ]);
+
+  const updates = selectLatestVisitorUpdates(allUpdates).filter(
+    (update) => update.status === "PERMANENT_FAILED",
+  );
 
   const recoverableRegistrations = registrations.filter((registration) =>
     isRecoverableOfflineFailure(
@@ -4306,14 +4640,24 @@ export async function recoverRetryableOfflineFailures(): Promise<RecoverOfflineF
   );
 
   /*
-   * Visitor edits are partial field patches and their original `changes` payload
-   * remains stored locally. Re-queue every failed visitor edit so the rescue
-   * path can merge those exact local fields into the newest server copy.
+   * Visitor edits: only the newest operation per registration may be retried.
+   * Older failed edits are historical/superseded and must never be replayed
+   * after a newer edit (or a newer successful sync) exists.
    *
-   * We intentionally do NOT do the same for offline registrations/scans: those
-   * may contain true duplicates/signature problems and remain conservative.
+   * We also auto-recover only transformations that are deterministic and safe:
+   * - Resident -> resident
+   * - Specialist -> specialist
+   * - obviously imported text in phone -> numeric landline when available
+   * - genuine optimistic-concurrency conflicts
+   *
+   * Free-text invalid qualification values stay in manual review.
    */
-  const recoverableUpdates = updates;
+  const recoverableUpdates = updates
+    .filter((update) => isSafelyRecoverableVisitorUpdate(update))
+    .map((update) => ({
+      ...update,
+      changes: sanitizeLegacyVisitorUpdateChanges(update.changes).changes,
+    }));
 
   const recoverableScans = scans.filter((scan) => {
     if (isRecoverableOfflineFailure(scan.errorCode, scan.errorMessage)) {
