@@ -4009,13 +4009,168 @@ export async function getPendingStaffVisitorUpdatesCount() {
   }).length;
 }
 
+export type StaffVisitorReviewMismatch = {
+  field: string;
+  localValue: unknown;
+  serverValue: unknown;
+};
+
+export type StaffVisitorReviewItem = {
+  update: QueuedStaffVisitorUpdate;
+  visitor: CachedStaffVisitor | null;
+  kind: "PERMANENT_FAILED" | "SYNCED_MISMATCH";
+  mismatches: StaffVisitorReviewMismatch[];
+
+  /**
+   * Safe deterministic repair payload.
+   *
+   * We only auto-build this when the mismatch is limited to top-level fields
+   * that were explicitly present in the queued change. Custom-field
+   * mismatches stay manual so we never overwrite unrelated newer server data.
+   */
+  repairChanges: UpdateStaffVisitorPayload | null;
+};
+
+function sameReviewValue(left: unknown, right: unknown) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function getSyncedVisitorUpdateMismatches(
+  update: QueuedStaffVisitorUpdate,
+): StaffVisitorReviewMismatch[] {
+  if (update.status !== "SYNCED" || !update.response) {
+    return [];
+  }
+
+  const mismatches: StaffVisitorReviewMismatch[] = [];
+  const changes = update.changes ?? {};
+  const response = update.response;
+
+  const topLevelFields: Array<keyof UpdateStaffVisitorPayload> = [
+    "fullName",
+    "phone",
+    "email",
+    "companyName",
+    "jobTitle",
+    "notes",
+  ];
+
+  for (const field of topLevelFields) {
+    if (changes[field] === undefined) continue;
+
+    const localValue = changes[field];
+    const serverValue = response[field as keyof UpdateStaffVisitorResponse];
+
+    if (!sameReviewValue(localValue, serverValue)) {
+      mismatches.push({
+        field: String(field),
+        localValue,
+        serverValue,
+      });
+    }
+  }
+
+  const localCustomFields =
+    (changes.customFields as Record<string, unknown> | undefined) ?? {};
+  const serverCustomFields =
+    (response.customFields as Record<string, unknown> | undefined) ?? {};
+
+  for (const [key, localValue] of Object.entries(localCustomFields)) {
+    const serverValue = serverCustomFields[key];
+
+    if (!sameReviewValue(localValue, serverValue)) {
+      mismatches.push({
+        field: `customFields.${key}`,
+        localValue,
+        serverValue,
+      });
+    }
+  }
+
+  return mismatches;
+}
+
+function buildSafeReviewRepairChanges(
+  update: QueuedStaffVisitorUpdate,
+  mismatches: StaffVisitorReviewMismatch[],
+): UpdateStaffVisitorPayload | null {
+  if (mismatches.length === 0) return null;
+
+  /*
+   * A customFields patch currently replaces the whole customFields object in
+   * the local cache. Do not auto-repair custom-field mismatches here; force a
+   * human review instead.
+   */
+  if (mismatches.some((item) => item.field.startsWith("customFields."))) {
+    return null;
+  }
+
+  const repair: UpdateStaffVisitorPayload = {};
+  const changes = update.changes ?? {};
+
+  for (const mismatch of mismatches) {
+    const field = mismatch.field as keyof UpdateStaffVisitorPayload;
+
+    if (changes[field] === undefined || field === "customFields") continue;
+
+    (repair as Record<string, unknown>)[field] = changes[field] as unknown;
+  }
+
+  return Object.keys(repair).length > 0 ? repair : null;
+}
+
+export async function getStaffVisitorReviewItems(
+  eventId?: string,
+): Promise<StaffVisitorReviewItem[]> {
+  await resetStaleSyncingVisitorUpdates();
+
+  const latestUpdates = await getLatestStaffVisitorUpdates();
+  const scopedUpdates = latestUpdates
+    .filter((item) => !eventId || item.eventId === eventId)
+    .sort((left, right) => compareVisitorUpdateRecency(right, left));
+
+  const items: StaffVisitorReviewItem[] = [];
+
+  for (const update of scopedUpdates) {
+    const visitor =
+      (await staffScannerDb.visitors.get(update.registrationId)) ?? null;
+
+    if (update.status === "PERMANENT_FAILED") {
+      items.push({
+        update,
+        visitor,
+        kind: "PERMANENT_FAILED",
+        mismatches: [],
+        repairChanges: null,
+      });
+      continue;
+    }
+
+    const mismatches = getSyncedVisitorUpdateMismatches(update);
+
+    if (mismatches.length > 0) {
+      items.push({
+        update,
+        visitor,
+        kind: "SYNCED_MISMATCH",
+        mismatches,
+        repairChanges: buildSafeReviewRepairChanges(update, mismatches),
+      });
+    }
+  }
+
+  return items;
+}
+
 export async function getPermanentFailedStaffVisitorUpdatesCount() {
   await resetStaleSyncingVisitorUpdates();
 
   const latestUpdates = await getLatestStaffVisitorUpdates();
 
-  return latestUpdates.filter((item) => item.status === "PERMANENT_FAILED")
-    .length;
+  return latestUpdates.filter((item) => {
+    if (item.status === "PERMANENT_FAILED") return true;
+    return getSyncedVisitorUpdateMismatches(item).length > 0;
+  }).length;
 }
 
 export async function getQueuedStaffVisitorUpdates() {

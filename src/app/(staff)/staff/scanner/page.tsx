@@ -46,6 +46,7 @@ import { StaffScannerHeader } from "@/features/staff-scanner/components/StaffSca
 import { StaffVisitorCard } from "@/features/staff-scanner/components/StaffVisitorCard";
 import { StaffVisitorsPanel } from "@/features/staff-scanner/components/StaffVisitorsPanel";
 import { StaffEditVisitorModal } from "@/features/staff-scanner/components/StaffEditVisitorModal";
+import { StaffVisitorReviewModal } from "@/features/staff-scanner/components/StaffVisitorReviewModal";
 import {
   cleanCustomFields,
   createOperationId,
@@ -91,6 +92,8 @@ import {
   getCachedStaffVisitorsCount,
   getPendingOfflineWorkCount,
   getPermanentFailedOfflineWorkCount,
+  getStaffVisitorReviewItems,
+  StaffVisitorReviewItem,
   recoverRetryableOfflineFailures,
   searchCachedStaffVisitors,
   downloadStaffVisitorsSnapshot,
@@ -205,6 +208,10 @@ export default function StaffScannerPage() {
 
   const [pendingCount, setPendingCount] = useState(0);
   const [permanentFailedCount, setPermanentFailedCount] = useState(0);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [reviewItems, setReviewItems] = useState<StaffVisitorReviewItem[]>([]);
+  const [isLoadingReviewItems, setIsLoadingReviewItems] = useState(false);
+  const [repairingReviewOperationId, setRepairingReviewOperationId] = useState<string | null>(null);
   const [isRecoveringFailures, setIsRecoveringFailures] = useState(false);
   const [lastOfflineSaved, setLastOfflineSaved] = useState(false);
 
@@ -1397,6 +1404,72 @@ export default function StaffScannerPage() {
 
     setPendingCount(pending);
     setPermanentFailedCount(permanentFailed);
+  }
+
+  async function refreshReviewItems() {
+    if (!activeContext.eventId) {
+      setReviewItems([]);
+      return;
+    }
+
+    setIsLoadingReviewItems(true);
+
+    try {
+      const items = await getStaffVisitorReviewItems(activeContext.eventId);
+      setReviewItems(items);
+    } catch (error) {
+      console.error("Could not load visitor review items:", error);
+      toast.error("تعذر تحميل الحالات التي تحتاج مراجعة.");
+    } finally {
+      setIsLoadingReviewItems(false);
+    }
+  }
+
+  async function openReviewModal() {
+    setReviewModalOpen(true);
+    await refreshReviewItems();
+  }
+
+  function openReviewItemForEdit(item: StaffVisitorReviewItem) {
+    const baseVisitor = item.visitor;
+
+    if (!baseVisitor) {
+      toast.error("تعذر العثور على نسخة الزائر المحلية. لا يتم حذف التعديل المحفوظ.");
+      return;
+    }
+
+    const changes = item.update.changes ?? {};
+    const mergedVisitor = {
+      ...baseVisitor,
+      ...changes,
+      customFields: {
+        ...(baseVisitor.customFields ?? {}),
+        ...((changes.customFields as Record<string, unknown> | undefined) ?? {}),
+      },
+    } as StaffVisitor;
+
+    setReviewModalOpen(false);
+    setEditingVisitor(mergedVisitor);
+    setEditModalOpen(true);
+  }
+
+  async function repairReviewItem(item: StaffVisitorReviewItem) {
+    if (!item.visitor || !item.repairChanges) {
+      toast.error("هذه الحالة تحتاج مراجعة يدوية ولا يمكن إصلاحها تلقائيًا بأمان.");
+      return;
+    }
+
+    if (repairingReviewOperationId) return;
+
+    setRepairingReviewOperationId(item.update.operationId);
+
+    try {
+      await submitVisitorUpdate(item.visitor as StaffVisitor, item.repairChanges);
+      await refreshReviewItems();
+      await refreshPendingCount();
+    } finally {
+      setRepairingReviewOperationId(null);
+    }
   }
 
   async function recoverFailedOfflineWork() {
@@ -4038,23 +4111,33 @@ export default function StaffScannerPage() {
 
             <div className="flex flex-wrap items-center gap-2">
               {permanentFailedCount > 0 ? (
-                <Button
-                  variant="outline"
-                  disabled={
-                    !isOnline ||
-                    !isReady ||
-                    isSyncingQueue ||
-                    isRecoveringFailures
-                  }
-                  onClick={() => void recoverFailedOfflineWork()}
-                >
-                  {isRecoveringFailures ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4" />
-                  )}
-                  استعادة المعلّقات
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => void openReviewModal()}
+                  >
+                    <XCircle className="h-4 w-4" />
+                    مراجعة الحالات ({permanentFailedCount})
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    disabled={
+                      !isOnline ||
+                      !isReady ||
+                      isSyncingQueue ||
+                      isRecoveringFailures
+                    }
+                    onClick={() => void recoverFailedOfflineWork()}
+                  >
+                    {isRecoveringFailures ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    إعادة محاولة الآمن فقط
+                  </Button>
+                </>
               ) : null}
 
               <Button
@@ -4247,6 +4330,17 @@ export default function StaffScannerPage() {
         isSubmitting={isUpdatingVisitor}
         onClose={closeEditVisitorModal}
         onSubmit={submitVisitorUpdate}
+      />
+
+      <StaffVisitorReviewModal
+        open={reviewModalOpen}
+        items={reviewItems}
+        loading={isLoadingReviewItems}
+        repairingOperationId={repairingReviewOperationId}
+        onClose={() => setReviewModalOpen(false)}
+        onRefresh={() => void refreshReviewItems()}
+        onReview={openReviewItemForEdit}
+        onRepair={(item) => void repairReviewItem(item)}
       />
 
       <StaffCreateVisitorModal
